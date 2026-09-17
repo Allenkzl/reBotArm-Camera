@@ -109,3 +109,37 @@ No motor scan was executed because the remote host could not be reached.
   on the reComputer.
 - After SSH is reachable, continue with the J1-J6-only scan in
   `target-1-camera-mount-scan.md`.
+
+## Retry: 2026-09-17 11:45:12 CST
+
+The host became reachable again, but SSH authentication failed.
+
+Read-only host/CAN checks attempted against both known names:
+
+```bash
+ssh -o BatchMode=yes -o ConnectTimeout=8 com@com-desktop.local '...read-only host and CAN checks...'
+ssh -o BatchMode=yes -o ConnectTimeout=8 com@192.168.50.194 '...read-only host and CAN checks...'
+```
+
+Both returned:
+
+```text
+Permission denied (publickey,password).
+```
+
+Then a normal non-BatchMode SSH attempt was tried:
+
+```bash
+ssh -o ConnectTimeout=8 com@com-desktop.local 'hostname && whoami && date -Is'
+```
+
+Result:
+
+```text
+Permission denied, please try again.
+Permission denied, please try again.
+com@com-desktop.local: Permission denied (publickey,password).
+```
+
+Conclusion: network reachability has recovered, but authentication is blocking
+the scan. No motor scan was executed.
