@@ -82,6 +82,7 @@ function renderStatus(status) {
       <td>${fmt(status.q_deg?.[i], 1)}</td>
       <td>${fmt(status.tau_model_nm?.[i])}</td>
       <td>${fmt(status.tau_payload_nm?.[i])}</td>
+      <td>${fmt(status.tau_total_nm?.[i])}</td>
       <td>${fmt(status.tau_cmd_nm?.[i])}</td>
     </tr>
   `);
@@ -98,6 +99,14 @@ function addEvent(event) {
   }
 }
 
+function logClient(message, level = "info") {
+  addEvent({
+    ts: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+    level,
+    message,
+  });
+}
+
 document.querySelector("#quickButtons").addEventListener("click", (event) => {
   const button = event.target.closest("button[data-percent]");
   if (!button) return;
@@ -110,29 +119,49 @@ document.querySelector("#quickButtons").addEventListener("click", (event) => {
 });
 
 document.querySelector("#startBtn").addEventListener("click", async () => {
-  try { renderStatus(await post("/api/start", settings())); } catch (e) { addEvent({ level: "danger", message: e.message }); }
+  const s = settings();
+  logClient(`POST /api/start ${s.base_percent}%`);
+  try { renderStatus(await post("/api/start", s)); } catch (e) { addEvent({ level: "danger", message: e.message }); }
 });
 document.querySelector("#applyBtn").addEventListener("click", async () => {
-  try { renderStatus(await post("/api/apply", settings())); } catch (e) { addEvent({ level: "danger", message: e.message }); }
+  const s = settings();
+  logClient(`POST /api/apply ${s.base_percent}% trims=${JSON.stringify(s.trims)}`);
+  try { renderStatus(await post("/api/apply", s)); } catch (e) { addEvent({ level: "danger", message: e.message }); }
 });
 document.querySelector("#stopBtn").addEventListener("click", async () => {
+  logClient("POST /api/stop");
   try { renderStatus(await post("/api/stop")); } catch (e) { addEvent({ level: "danger", message: e.message }); }
 });
 document.querySelector("#homeBtn").addEventListener("click", async () => {
   if (!confirm("Return J1-J6 to Home and disable? Keep supporting the payload.")) return;
+  logClient("POST /api/home-disable", "warn");
   try { renderStatus(await post("/api/home-disable")); } catch (e) { addEvent({ level: "danger", message: e.message }); }
 });
 document.querySelector("#estopBtn").addEventListener("click", async () => {
   if (!confirm("Emergency disable may let the loaded arm drop. Continue?")) return;
+  logClient("POST /api/emergency-disable", "danger");
   try { renderStatus(await post("/api/emergency-disable")); } catch (e) { addEvent({ level: "danger", message: e.message }); }
 });
 
 syncLabels();
-fetch("/api/status").then((r) => r.json()).then(renderStatus);
+fetch("/api/status", { cache: "no-store" }).then((r) => r.json()).then((status) => {
+  renderStatus(status);
+  logClient(`connected to ${status.dry_run ? "dry-run" : "LIVE"} service`);
+});
 
 const source = new EventSource("/api/events");
+source.onopen = () => logClient("event stream connected");
+source.onerror = () => logClient("event stream disconnected; polling still active", "warn");
 source.onmessage = (message) => {
   const payload = JSON.parse(message.data);
   if (payload.type === "status") renderStatus(payload.status);
   if (payload.type === "event") addEvent(payload.event);
 };
+
+setInterval(async () => {
+  try {
+    renderStatus(await fetch("/api/status", { cache: "no-store" }).then((r) => r.json()));
+  } catch (e) {
+    addEvent({ level: "danger", message: `poll failed: ${e.message}` });
+  }
+}, 2000);

@@ -36,7 +36,7 @@
             <span>Total</span>
             <input id="basePercent" type="range" min="0" max="60" value="20" step="1" />
           </label>
-          <p class="hint">Total scales the model gravity torque; pose changes are recalculated continuously.</p>
+          <p class="hint">Total scales model + camera-payload gravity torque; pose changes are recalculated continuously.</p>
 
           <div class="quick-buttons" id="quickButtons">
             <button data-percent="20">20</button>
@@ -88,6 +88,7 @@
                 <th>deg</th>
                 <th>model Nm</th>
                 <th>payload Nm</th>
+                <th>total Nm</th>
                 <th>cmd Nm</th>
               </tr>
             </thead>

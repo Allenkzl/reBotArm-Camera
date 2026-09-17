@@ -125,6 +125,7 @@ class RobotStatus:
     q_deg: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_model_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_payload_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
+    tau_total_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_cmd_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
     message: str = "ready"
     updated_ms: int = field(default_factory=now_ms)
@@ -144,6 +145,7 @@ class RobotStatus:
             "q_deg": self.q_deg,
             "tau_model_nm": self.tau_model_nm,
             "tau_payload_nm": self.tau_payload_nm,
+            "tau_total_nm": self.tau_total_nm,
             "tau_cmd_nm": self.tau_cmd_nm,
             "message": self.message,
             "updated_ms": self.updated_ms,
@@ -235,6 +237,7 @@ class GravityConsole:
         with self.lock:
             self.events.append(event)
             self.events = self.events[-200:]
+        print(json.dumps({"event": event}, ensure_ascii=False), flush=True)
         self._publish({"type": "event", "event": event})
         self._write_log({"kind": "event", **event})
 
@@ -456,6 +459,7 @@ class GravityConsole:
                 loop_t = time.time()
                 q = self._read_positions(loop_t - t0)
                 tau_model, tau_payload = self._estimate_payload(q)
+                tau_total = tau_model + tau_payload
                 with self.lock:
                     target_scale = self._effective_scale(self.settings)
                     base_percent = self.settings.base_percent
@@ -463,7 +467,7 @@ class GravityConsole:
                 max_step = 0.15 * dt
                 delta = np.clip(target_scale - current_scale, -max_step, max_step)
                 current_scale = current_scale + delta
-                tau_cmd = tau_model * current_scale
+                tau_cmd = tau_total * current_scale
                 self._send_mit(q, tau_cmd)
                 self._write_log(
                     {
@@ -473,6 +477,7 @@ class GravityConsole:
                         "q_deg": deg(q),
                         "tau_model_nm": [float(x) for x in tau_model],
                         "tau_payload_nm": [float(x) for x in tau_payload],
+                        "tau_total_nm": [float(x) for x in tau_total],
                         "tau_cmd_nm": [float(x) for x in tau_cmd],
                         "base_percent": base_percent,
                         "trims": trims,
@@ -491,6 +496,7 @@ class GravityConsole:
                         q_deg=deg(q),
                         tau_model_nm=[float(x) for x in tau_model],
                         tau_payload_nm=[float(x) for x in tau_payload],
+                        tau_total_nm=[float(x) for x in tau_total],
                         tau_cmd_nm=[float(x) for x in tau_cmd],
                         message=f"running {base_percent:.0f}%",
                     )
@@ -499,8 +505,9 @@ class GravityConsole:
                 if sleep_for > 0:
                     time.sleep(sleep_for)
             q = self._read_positions(time.time() - t0)
-            tau_model, _ = self._estimate_payload(q)
-            self._send_mit(q, tau_model * current_scale)
+            tau_model, tau_payload = self._estimate_payload(q)
+            tau_total = tau_model + tau_payload
+            self._send_mit(q, tau_total * current_scale)
             self._write_log({"kind": "stop_hold", "q_deg": deg(q)})
             self._set_status(mode="holding", enabled=True, q_deg=deg(q), message="stopped and holding current pose")
         except Exception as exc:
@@ -537,7 +544,8 @@ class GravityConsole:
             for i in range(steps):
                 s = (i + 1) / steps
                 q = q0 + (home - q0) * minimum_jerk(s)
-                tau = self._estimate_payload(q)[0]
+                tau_model, tau_payload = self._estimate_payload(q)
+                tau = tau_model + tau_payload
                 run_robot.arm.send_mit(q, vel=np.zeros(6), kp=kp, kd=kd, tau=tau)
                 if i % 20 == 0:
                     self._set_status(mode="homing", q_deg=deg(q), message="homing")
@@ -569,6 +577,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -602,6 +611,7 @@ class Handler(BaseHTTPRequestHandler):
             ctype = "application/javascript; charset=utf-8"
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(content)))
         self.end_headers()
         self.wfile.write(content)

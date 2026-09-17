@@ -3,12 +3,12 @@
 The gravity console is a local web tool for tuning low-ratio gravity
 compensation with the camera payload installed.
 
-The `Total` percentage is a global multiplier on the model gravity torque. The
-gravity torque itself is still recalculated continuously from the current pose,
-so 35 percent does not mean a fixed torque; it means "send 35 percent of the
-current pose's model gravity estimate." The payload estimate is logged and
-displayed separately so we can later move from empirical tuning to a payload
-mass/center-of-mass correction.
+The `Total` percentage is a global multiplier on the estimated model plus
+camera-payload gravity torque. The gravity torque itself is still recalculated
+continuously from the current pose, so 35 percent does not mean a fixed torque;
+it means "send 35 percent of the current pose's total gravity estimate." The
+payload estimate is logged and displayed separately so we can later tune the
+payload mass/center-of-mass correction.
 
 ## Safety Model
 
