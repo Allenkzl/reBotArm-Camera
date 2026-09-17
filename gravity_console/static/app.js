@@ -10,8 +10,12 @@ const els = {
   trimJ3Out: document.querySelector("#trimJ3Out"),
   trimJ4Out: document.querySelector("#trimJ4Out"),
   mode: document.querySelector("#modeBadge"),
+  modeCard: document.querySelector("#modeCard"),
+  modeTitle: document.querySelector("#modeTitle"),
+  modeText: document.querySelector("#modeText"),
   runId: document.querySelector("#runId"),
   dryRun: document.querySelector("#dryRun"),
+  startBtn: document.querySelector("#startBtn"),
   message: document.querySelector("#message"),
   logPath: document.querySelector("#logPath"),
   body: document.querySelector("#telemetryBody"),
@@ -53,6 +57,13 @@ function fmt(v, digits = 2) {
 }
 
 function renderStatus(status) {
+  const isLive = !status.dry_run;
+  document.body.classList.toggle("live-mode", isLive);
+  els.modeCard.classList.toggle("live", isLive);
+  els.modeCard.classList.toggle("dry", !isLive);
+  els.modeTitle.textContent = isLive ? "LIVE" : "DRY-RUN";
+  els.modeText.textContent = isLive ? "J1-J6 real motor control" : "simulation console";
+  els.startBtn.textContent = isLive ? "Start live test" : "Start dry-run";
   els.mode.textContent = status.mode || "idle";
   els.runId.textContent = status.run_id || "no run";
   els.dryRun.textContent = status.dry_run ? "dry-run" : "live";

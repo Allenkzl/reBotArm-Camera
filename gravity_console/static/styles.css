@@ -121,6 +121,39 @@ h2 {
   color: var(--text);
 }
 
+.mode-card {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: #10150e;
+  border-radius: 6px;
+}
+
+.mode-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.mode-card strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.mode-card.live {
+  border-color: #8b392f;
+  background: #241512;
+}
+
+.mode-card.live span,
+.mode-card.live strong {
+  color: #ffd5d1;
+}
+
 #percentReadout {
   color: var(--accent);
   font-size: 32px;
@@ -177,6 +210,11 @@ button:hover {
   background: var(--accent);
   color: #161b10;
   font-weight: 900;
+}
+
+.live-mode .primary {
+  background: var(--danger);
+  color: #fff4f2;
 }
 
 .danger {
