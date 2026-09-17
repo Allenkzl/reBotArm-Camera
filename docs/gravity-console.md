@@ -62,3 +62,19 @@ python3 gravity_console/server.py --dry-run --port 8012
 5. Stop immediately if the arm rises by itself, dives, oscillates, heats, or
    sounds abnormal.
 6. Use `Home disable` before leaving the arm.
+
+## Lessons From Global Tuning
+
+The global percentage is useful for a first feel test, but it is not a final
+camera-payload compensation strategy. In the 2026-09-17 live run, J4 began to
+overcompensate around 40-60 percent while J2/J3 still did not feel properly
+supported. The log showed that J2 received very little torque because model and
+payload terms partly canceled, while J3 still needed more torque than the global
+scale provided.
+
+Do not keep increasing the global percentage after J4 starts lifting against
+gravity. Use the detailed result note instead:
+
+```text
+docs/checklists/target-2-global-gravity-tuning-result-2026-09-17.md
+```
