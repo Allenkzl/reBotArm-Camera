@@ -40,6 +40,7 @@
   - 2026-09-17 完成 Target 3.2 最小主动 PD hold 探针：J1-J6 enable 持当前姿态 6 秒、回起点、淡出、disable，未 abort。单姿态 residual 不足以辨识 COM；下一步应做 2-3° J3 小幅 sweep，并过滤速度尖峰。
   - 2026-09-17 Target 3.2 关键结果：日志 `logs/payload-id/pd_hold_probe_20260917_163417.jsonl` 采样 240 条，事件链为 `hold_complete -> returned_to_start -> disabled -> closed`；起始姿态约 `[-15.23, 0.12, 0.90, -1.15, -0.07, 33.42]°`，hold 结束约 `[-14.61, 1.10, 1.12, -0.64, -0.02, 32.94]°`，6 秒内最大漂移约 `[0.62, 1.01, 0.26, 0.51, 0.07, 0.51]°`。平均 residual torque 约 `[-0.09, -0.33, -0.07, -0.07, -0.01, 0.05] N·m`，说明 near-Home 单姿态数据太弱，必须用多姿态或小幅扫动增加可观测性。
   - 2026-09-17 下一步待执行 Target 3.3：在用户确认人在机械臂旁、环境安全后，做比 Target 3.2 稍激进但仍受控的单关节慢速辨识 sweep。优先 J3，幅度从 `±3°` 起步，可视效果升到 `±5°`；速度目标 `0.03-0.06 rad/s`；每个端点 dwell 2 秒；J4 feedforward 继续限幅，速度 abort 改为低通/连续样本触发；完成后回到起始姿态、淡出、disable。目标不是一次算准重量和质心，而是先验证上下行 residual 是否随姿态重复变化。
+  - 2026-09-17 完成 Target 3.3 三轮 J3 慢速 sweep：`±3°` 太弱，实际 J3 仅动 `0.35°`；`±6°` 加强 J2/J3 后实际 J3 动 `3.36°`，但 J4 漂移 `5.58°`；第三轮加强 J4 保持后实际 J3 动 `4.64°`、J4 漂移降到 `2.26°`，post-disable 姿态稳定。结论：运动辨识路线可行，但当前 sweep residual 仍混有轨迹跟踪误差，不能直接输出可靠重量/质心。下一步应改为多姿态静态平衡点采样。
 
 ## 重要约定
 
@@ -51,6 +52,7 @@
 - 旧抓取项目中的 gripper Home、J7 零点、手眼标定和 `gripper_end` TCP 都不能直接当作相机负载阶段的最终事实。
 - 负载辨识当前可用信号是 J1-J6 位置反馈和主动控制时的 PD 跟踪误差；disabled/read-only 模式没有可靠 torque/current/effort 字段。后续识别重量/质心应依赖多姿态、小幅慢速运动产生的 residual 变化，而不是继续调全局百分比。
 - Target 3.3 及后续主动 sweep 必须把日志同步写入 JSONL 并在控制台打印关键事件；速度估计不能只用单样本有限差分作为 abort 依据，应使用滤波或连续超限判断，避免 RobStride 位置量化带来的尖峰误判。
+- 连续 sweep 数据只适合判断“控制参数是否能动起来”和 residual 是否随姿态变化；真正拟合重量/质心前，应优先采集低速度、低误差、目标姿态等于实际姿态的静态 dwell 窗口，避免把轨迹追踪误差误当成重力。
 
 ## 变更日志
 
@@ -70,3 +72,4 @@
 | 2026-09-17 | feature/payload-identification | 完成 Target 3.1 只读反馈审计：仅位置反馈可用，负载辨识需进入保守 PD 误差法。 |
 | 2026-09-17 | feature/payload-identification | 完成 Target 3.2 最小主动 PD hold 探针，验证可稳定采集单姿态 PD 误差数据。 |
 | 2026-09-17 | feature/payload-identification | 补充记录 Target 3.2 全过程关键数据，并确定 Target 3.3 采用 J3 小幅慢速 sweep 验证 residual 可重复性。 |
+| 2026-09-17 | feature/payload-identification | 完成 Target 3.3 三轮 J3 慢速 sweep，确认更强 J3/J4 姿态控制能产生可用但尚不可直接拟合的 residual 数据。 |

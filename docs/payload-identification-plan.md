@@ -260,3 +260,21 @@ The first active hold probe completed without abort and returned close to the
 starting pose. It produced stable data but only at one near-Home pose, so it is
 not enough to identify mass/COM. The next active step should be a tiny J3 sweep,
 not a large lift or flip.
+
+Target 3.3 status on 2026-09-17:
+
+```text
+completed: docs/checklists/target-3-slow-sweep-result-2026-09-17.md
+```
+
+Three J3 slow-sweep runs were completed. The best run used stronger J2/J3/J4
+posture control and produced an actual J3 span of about 4.64 degrees while
+reducing J4 drift to about 2.26 degrees. This proves the motion-based path can
+produce posture-dependent residuals, but the samples are still not suitable for
+a reliable mass/COM fit because the J3 tracking error is large and the residual
+includes trajectory-following effort.
+
+Target 3.4 should collect quasi-static balance points instead of a continuous
+sweep: move to a pose, set the target to the measured current pose, dwell, log
+low-velocity/low-error samples, then repeat across several J2/J3/J4 pose
+combinations.
