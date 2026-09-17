@@ -37,6 +37,7 @@
   - 2026-09-17 全局重力补偿实测结论：40-60% 时 J4 已可能过补甚至飞臂，但 J2/J3 仍不能可靠支撑；日志显示 J2 总力矩因模型项和负载项抵消而很小，J3 在 60% 仍低于估算满额需求。后续不应继续提高全局倍率，应转向关节独立倍率或负载参数辨识。
   - 2026-09-17 新开 `feature/payload-identification`：规划先做只读反馈字段审计，再做准静态采样、慢速小幅扫动和离线最小二乘拟合，目标是估计相机 `m/rx/ry/rz`。
   - 2026-09-17 完成 Target 3.1 只读反馈审计：J1-J6 位置可通过 RobStride `0x7019` 读取；disabled/read-only 模式下没有可用 torque/current/effort 缓存反馈，不能仅靠只读数据辨识相机负载。下一步需要保守 PD hold/sweep，用跟踪误差估算 holding torque。
+  - 2026-09-17 完成 Target 3.2 最小主动 PD hold 探针：J1-J6 enable 持当前姿态 6 秒、回起点、淡出、disable，未 abort。单姿态 residual 不足以辨识 COM；下一步应做 2-3° J3 小幅 sweep，并过滤速度尖峰。
 
 ## 重要约定
 
@@ -63,3 +64,4 @@
 | 2026-09-17 | feature/gravity-console | 记录全局重力补偿实测复盘：J4 过补、J2/J3 不足，下一步转向相机负载辨识。 |
 | 2026-09-17 | feature/payload-identification | 新增相机负载辨识规划：从只读反馈审计开始，再进入准静态采样和慢速扫动。 |
 | 2026-09-17 | feature/payload-identification | 完成 Target 3.1 只读反馈审计：仅位置反馈可用，负载辨识需进入保守 PD 误差法。 |
+| 2026-09-17 | feature/payload-identification | 完成 Target 3.2 最小主动 PD hold 探针，验证可稳定采集单姿态 PD 误差数据。 |

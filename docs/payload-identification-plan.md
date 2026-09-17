@@ -249,3 +249,14 @@ The audit found usable read-only position feedback through RobStride `0x7019`,
 but no independent torque/current/effort feedback in disabled mode. The next
 identification method should estimate holding torque from controlled PD tracking
 error during quasi-static active tests.
+
+Target 3.2 status on 2026-09-17:
+
+```text
+completed: docs/checklists/target-3-pd-hold-probe-2026-09-17.md
+```
+
+The first active hold probe completed without abort and returned close to the
+starting pose. It produced stable data but only at one near-Home pose, so it is
+not enough to identify mass/COM. The next active step should be a tiny J3 sweep,
+not a large lift or flip.
