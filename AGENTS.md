@@ -20,7 +20,7 @@
 
 ## 当前状态
 
-- 活跃分支：`feature/gravity-console`，用于实现 J1-J6-only 相机负载重力补偿网页调参工具；`main` 已完成目标一只读检查、目标二 20% 重力补偿测试和回 Home 失能记录。
+- 活跃分支：`feature/payload-identification`，用于规划并验证通过安全慢动作/准静态数据辨识相机重量和质心；`feature/gravity-console` 已记录全局重力补偿网页和实测复盘。
 - 已完成功能：
   - 建立本地仓库并绑定远程 `https://github.com/Allenkzl/reBotArm-Camera.git`。
   - 建立目标一：相机安装后的只读扫描检查单。
@@ -35,6 +35,7 @@
   - 2026-09-17 新增 `feature/gravity-console`：正在实现本地网页，用于在 J1-J6-only 临时配置下手动调节重力补偿比例、记录遥测日志，并提供 Stop hold / Home disable / Emergency disable 三种收尾动作。
   - 2026-09-17 修复网页调参工具：旧版百分比只作用于机械臂模型重力，未把 `0.8 kg` 相机负载加入实际下发扭矩；新版使用 `model + payload` 总重力矩，表格显示 `total Nm`，网页 Run Log 也显示客户端请求和事件流状态。
   - 2026-09-17 全局重力补偿实测结论：40-60% 时 J4 已可能过补甚至飞臂，但 J2/J3 仍不能可靠支撑；日志显示 J2 总力矩因模型项和负载项抵消而很小，J3 在 60% 仍低于估算满额需求。后续不应继续提高全局倍率，应转向关节独立倍率或负载参数辨识。
+  - 2026-09-17 新开 `feature/payload-identification`：规划先做只读反馈字段审计，再做准静态采样、慢速小幅扫动和离线最小二乘拟合，目标是估计相机 `m/rx/ry/rz`。
 
 ## 重要约定
 
@@ -59,3 +60,4 @@
 | 2026-09-17 | feature/gravity-console | 开始实现 J1-J6-only 相机负载重力补偿网页调参工具。 |
 | 2026-09-17 | feature/gravity-console | 修复网页补偿算法：使用机械臂模型加相机负载总重力矩，并增强页面日志显示。 |
 | 2026-09-17 | feature/gravity-console | 记录全局重力补偿实测复盘：J4 过补、J2/J3 不足，下一步转向相机负载辨识。 |
+| 2026-09-17 | feature/payload-identification | 新增相机负载辨识规划：从只读反馈审计开始，再进入准静态采样和慢速扫动。 |
