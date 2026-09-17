@@ -238,3 +238,14 @@ Scope:
   identification.
 
 No active motion is allowed in this first small goal.
+
+Status on 2026-09-17:
+
+```text
+completed: docs/checklists/target-3-feedback-audit-2026-09-17.md
+```
+
+The audit found usable read-only position feedback through RobStride `0x7019`,
+but no independent torque/current/effort feedback in disabled mode. The next
+identification method should estimate holding torque from controlled PD tracking
+error during quasi-static active tests.
