@@ -1,0 +1,274 @@
+:root {
+  --bg: #10120f;
+  --panel: #181c17;
+  --panel-2: #20261e;
+  --line: #3c4638;
+  --text: #eef4e8;
+  --muted: #9faa99;
+  --accent: #d7ff66;
+  --warn: #ffbf47;
+  --danger: #ff5a4f;
+  --ok: #7dffa2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    var(--bg);
+  background-size: 28px 28px;
+  color: var(--text);
+  font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.shell {
+  width: min(1280px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 24px 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 0 22px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent);
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+h1,
+h2 {
+  margin: 0;
+  line-height: 1;
+}
+
+h1 {
+  font-size: 42px;
+}
+
+h2 {
+  font-size: 18px;
+}
+
+.status-strip {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: var(--muted);
+}
+
+.badge {
+  min-width: 84px;
+  text-align: center;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  background: #11150f;
+  color: var(--ok);
+  text-transform: uppercase;
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 410px 1fr;
+  gap: 16px;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--panel), #141812);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28);
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.log-panel {
+  grid-column: 1 / -1;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+  color: var(--muted);
+}
+
+.panel-head h2 {
+  color: var(--text);
+}
+
+#percentReadout {
+  color: var(--accent);
+  font-size: 32px;
+  font-weight: 900;
+}
+
+.slider-row,
+.trim-grid label {
+  display: grid;
+  grid-template-columns: 76px 1fr 44px;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.slider-row {
+  grid-template-columns: 76px 1fr;
+  margin-bottom: 8px;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.hint {
+  margin: 0 0 16px 76px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.quick-buttons {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+.primary {
+  background: var(--accent);
+  color: #161b10;
+  font-weight: 900;
+}
+
+.danger {
+  background: #311512;
+  border-color: #74302b;
+  color: #ffd5d1;
+}
+
+.trim-grid {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.actions .danger {
+  grid-column: 1 / -1;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+th,
+td {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 10px 8px;
+  text-align: right;
+}
+
+th:first-child,
+td:first-child {
+  text-align: left;
+  color: var(--muted);
+}
+
+th {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.events {
+  height: 210px;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #0d100c;
+  padding: 10px;
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.event {
+  color: var(--muted);
+}
+
+.event.info {
+  color: var(--ok);
+}
+
+.event.warn {
+  color: var(--warn);
+}
+
+.event.danger {
+  color: var(--danger);
+}
+
+@media (max-width: 900px) {
+  .grid,
+  .topbar {
+    display: block;
+  }
+
+  .panel {
+    margin-bottom: 16px;
+  }
+
+  .hint {
+    margin-left: 0;
+  }
+
+  h1 {
+    font-size: 34px;
+    margin-bottom: 14px;
+  }
+}

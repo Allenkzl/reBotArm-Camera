@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>reBot Camera Gravity Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div>
+          <p class="eyebrow">reBotArm-Camera</p>
+          <h1>Gravity Console</h1>
+        </div>
+        <div class="status-strip">
+          <span id="modeBadge" class="badge">idle</span>
+          <span id="runId">no run</span>
+          <span id="dryRun">live</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="panel controls">
+          <div class="panel-head">
+            <h2>Compensation</h2>
+            <output id="percentReadout">20%</output>
+          </div>
+
+          <label class="slider-row">
+            <span>Total</span>
+            <input id="basePercent" type="range" min="0" max="60" value="20" step="1" />
+          </label>
+          <p class="hint">Total scales the model gravity torque; pose changes are recalculated continuously.</p>
+
+          <div class="quick-buttons" id="quickButtons">
+            <button data-percent="20">20</button>
+            <button data-percent="25">25</button>
+            <button data-percent="30">30</button>
+            <button data-percent="35">35</button>
+            <button data-percent="40">40</button>
+            <button data-percent="45">45</button>
+            <button data-percent="50">50</button>
+            <button data-percent="60">60</button>
+          </div>
+
+          <div class="trim-grid">
+            <label>
+              <span>J2 trim</span>
+              <input id="trimJ2" type="range" min="-20" max="20" value="0" step="1" />
+              <output id="trimJ2Out">0%</output>
+            </label>
+            <label>
+              <span>J3 trim</span>
+              <input id="trimJ3" type="range" min="-20" max="20" value="0" step="1" />
+              <output id="trimJ3Out">0%</output>
+            </label>
+            <label>
+              <span>J4 trim</span>
+              <input id="trimJ4" type="range" min="-20" max="20" value="0" step="1" />
+              <output id="trimJ4Out">0%</output>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button id="startBtn" class="primary">Start</button>
+            <button id="applyBtn">Apply</button>
+            <button id="stopBtn">Stop hold</button>
+            <button id="homeBtn">Home disable</button>
+            <button id="estopBtn" class="danger">Emergency disable</button>
+          </div>
+        </div>
+
+        <div class="panel telemetry">
+          <div class="panel-head">
+            <h2>Telemetry</h2>
+            <span id="message">ready</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Joint</th>
+                <th>deg</th>
+                <th>model Nm</th>
+                <th>payload Nm</th>
+                <th>cmd Nm</th>
+              </tr>
+            </thead>
+            <tbody id="telemetryBody"></tbody>
+          </table>
+        </div>
+
+        <div class="panel log-panel">
+          <div class="panel-head">
+            <h2>Run Log</h2>
+            <span id="logPath">no log</span>
+          </div>
+          <div id="events" class="events"></div>
+        </div>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
