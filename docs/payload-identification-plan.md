@@ -275,6 +275,55 @@ a reliable mass/COM fit because the J3 tracking error is large and the residual
 includes trajectory-following effort.
 
 Target 3.4 should collect quasi-static balance points instead of a continuous
-sweep: move to a pose, set the target to the measured current pose, dwell, log
-low-velocity/low-error samples, then repeat across several J2/J3/J4 pose
-combinations.
+sweep: move to a pose, hold the target fixed, dwell, log the settled window,
+then repeat across several J2/J3/J4 pose combinations.
+
+> **Correction (2026-09-17, after Target 3.4).** An earlier version of this
+> document advised "set the target to the measured current pose". That is
+> self-defeating: `err = q_target - q_actual`, so setting the target equal to the
+> actual pose zeroes the PD signal that is being measured. The target must be
+> held fixed while the joint settles to equilibrium. For the same reason, a
+> filter of "tracking error <= 1 deg" is wrong; the correct acceptance criterion
+> is a flat `tau_pd` window, a target inside the reachable range, and no limit
+> saturation. See `agent.md` section 6 and 12.
+
+## Target 3.4 status on 2026-09-17
+
+```text
+completed: docs/checklists/target-3-static-poses-result-2026-09-17.md
+```
+
+The static sampling chain is built and validated:
+
+```text
+payload_identification/design_poses.py          offline pose design, no CAN
+payload_identification/collect_static_poses.py  sampling run
+payload_identification/fit_arm_error.py         arm model error from old sweeps
+payload_identification/fit_payload.py           camera mass/COM fit
+```
+
+Results:
+
+- 10 poses plus a repeat of pose 0, no abort, safe return home, stable
+  post-disable pose. Log: `logs/payload-id/static_poses_20260917_180506.jsonl`.
+- Repeatability noise floor `max |dtau_pd| = 0.0681 N*m`. J1 shows a constant
+  friction bias and J5/J6 show zero, exactly as expected.
+
+Three findings changed the problem statement:
+
+1. The URDF still contains the J7 gripper (0.8004 kg), so the measurable
+   residual is `tau_camera - tau_gripper`, not the camera alone. The camera and
+   the gripper nearly cancel.
+2. `cam_only`, `grip_corrected` and `sign_flipped` are exactly degenerate
+   (they differ by exactly 0.8004 kg), so post-swap data alone cannot separate
+   the camera from the gripper. The 2026-07-17 pre-swap calibration sweeps are
+   the required baseline and are archived in
+   `/home/com/reBotArm_control_py/tools/gravity_calibration/data/`.
+3. Even with that baseline applied, the fit returns about 0.21 kg instead of the
+   expected 0.85 kg, and a mass scan shows the residual is *lowest* at m = 0.
+   The model is missing a systematic term.
+
+**The identification has not converged.** The highest-priority next step is to
+verify the effective MIT `kp`, because every torque number in this project --
+including the pre-swap calibration -- assumes the commanded `kp` equals the real
+`kp` and there is no independent torque sensor. See `agent.md` section 10.
