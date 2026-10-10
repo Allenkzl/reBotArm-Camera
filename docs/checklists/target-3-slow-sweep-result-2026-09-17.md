@@ -1,5 +1,29 @@
 # Target 3.3 Slow Sweep Result - 2026-09-17
 
+> ## Correction added 2026-09-17, after Target 3.4
+>
+> Two conclusions in this record were later shown to be wrong. The measurements
+> below are unchanged and still valid; only their interpretation is corrected.
+>
+> 1. **The `negative dwell` residual is not a gravity sample.** It is limit
+>    saturation. J3's lower limit is `0 deg` and Home sits at `+0.83 deg`; this
+>    run commanded J3 to `-5.02 deg`, which is below the reachable range. 546 of
+>    the 960 samples had a J3 target below zero, and the joint stopped dead on
+>    its hard stop (`q3` constant at `+1.033 deg`, window `std = 0.0000 deg`).
+>    The "excellent repeatability" of `tau_pd_J3 = -4.22 / -4.23 N*m` is the
+>    stop reaction force, not gravity. The valid gravity sample in this run is
+>    the `positive dwell` (`q3 = +5.46 deg`, tracking error `1.51 deg`).
+> 2. **The recommendation "at each pose, set the target to the measured current
+>    pose" is self-defeating.** Since `err = q_target - q_actual`, doing that
+>    zeroes the very PD signal being measured. The target must be held fixed
+>    while the joint settles. For the same reason, a filter of "tracking error
+>    <= 1 deg" is wrong: it would have discarded the valid `positive dwell`.
+>    The correct acceptance criterion is a flat `std(tau_pd)` window, a target
+>    inside the reachable range, and no limit saturation.
+>
+> See `agent.md` sections 6 and 12, and
+> `docs/checklists/target-3-static-poses-result-2026-09-17.md`.
+
 ## Scope
 
 This target tested whether small active motions can produce enough signal to
@@ -191,11 +215,14 @@ aggressiveness.
 Target 3.4 should switch from continuous sweep to short static balance points:
 
 1. Move slowly to a small set of actual poses.
-2. At each pose, set the target to the measured current pose.
-3. Hold for 2-3 seconds with stronger J2/J3/J4 posture control.
-4. Log only the settled dwell window.
+2. At each pose, hold the target fixed and wait for the settled equilibrium.
+   (Superseded: the original text here said "set the target to the measured
+   current pose", which zeroes the PD signal. See the correction at the top.)
+3. Hold for several seconds with stronger J2/J3/J4 posture control.
+4. Log only the settled dwell window, accepted when `std(tau_pd)` is flat,
+   the target is inside the reachable range, and no limit is touched.
 5. Use several actual J2/J3/J4 pose combinations.
-6. Fit payload parameters only from low-velocity, low-error samples.
+6. Fit payload parameters only from those settled windows.
 
 This should make the PD residual closer to holding torque and less polluted by
 trajectory tracking error.
