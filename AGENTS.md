@@ -23,9 +23,10 @@
 
 ## 当前状态
 
-- 活跃分支：`feature/esp32-canon-shutter`，XIAO 蓝牙快门 0.1.1 已实现并烧录，网页运行在 `http://127.0.0.1:8023/`；已实机配对 `seeedr6` 并收到 3 次快门写入成功，实际照片仍待用户确认。原分支的 4 个 `gravity_console` 未提交改动保留，不纳入快门功能提交。
+- 活跃分支：`feature/esp32-canon-shutter`，XIAO 蓝牙快门 0.1.1 已实现并烧录，网页地址 `http://127.0.0.1:8023/`；2026-10-15 用户确认网页连接 EOS R6 并触发实际拍照的流程已跑通，首版实机验收通过，已存档，待确认合并。原分支的 4 个 `gravity_console` 未提交改动保留，不纳入快门功能提交。
 - 活跃分支：`feature/payload-identification`，用于规划并验证通过安全慢动作/准静态数据辨识相机重量和质心；`feature/gravity-console` 已记录全局重力补偿网页和实测复盘。
 - 已完成功能：
+  - XIAO ESP32S3 Sense 佳能蓝牙快门：独立网页配对/连接状态/断开/清除配对/单次拍照；用户已确认 EOS R6 网页连接和实际拍照成功。当前采用本机网页 → USB → XIAO → BLE → 相机，尚未提供板端 Wi-Fi 网页。
   - 建立本地仓库并绑定远程 `https://github.com/Allenkzl/reBotArm-Camera.git`。
   - 建立目标一：相机安装后的只读扫描检查单。
 - 进行中：
@@ -100,3 +101,4 @@
 | 2026-09-17 | feature/payload-identification | 完成 Target 3.4 多姿态静态平衡点采样：新增 `design_poses.py` / `collect_static_poses.py` / `fit_arm_error.py` / `fit_payload.py`，10 姿态 + 重复姿态采集无 abort，噪声底 0.0681 N·m。 |
 | 2026-09-17 | feature/payload-identification | 发现 URDF 仍含 J7 夹爪（0.8004 kg），可测残差实为 `tau_camera - tau_gripper`，且相机与夹爪在数学上精确简并；引入旧标定基线 `E_old` 后辨识仍未收敛（拟合 0.21 kg，期望 0.85 kg）。 |
 | 2026-09-17 | feature/payload-identification | 重写 `agent.md` 为完整交接文档：新增核心物理推导、URDF/夹爪简并分析、E_old 基线、完整踩坑清单、未决问题与下一步优先级；新增 `docs/checklists/target-3-static-poses-result-2026-09-17.md`。 |
+| 2026-10-15 | feature/esp32-canon-shutter | 用户确认通过网页连接 EOS R6 并实际拍照成功，首版链路实机验收通过；更新快门 README，新增会话存档，记录 0.1.1 固件、运行方法、备份及仍待验证的扩展能力。 |
