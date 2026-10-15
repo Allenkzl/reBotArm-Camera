@@ -7,6 +7,7 @@
 ## 技术栈
 
 - Python 3.10
+- 相机快门子项目：XIAO ESP32S3 Sense、Arduino ESP32 3.3.8（NimBLE）、ArduinoJson 7；本机 Python 3.11 / pyserial 网页桥。
 - motorbridge / SocketCAN / PCAN-USB
 - ROS2 Humble / rebotarmcontroller
 - Pinocchio / reBotArm_control_py
@@ -18,9 +19,11 @@
 - `agent.md`: 给下一位工程师的完整交接入口，包含已完成实验、关键数据、踩坑和下一步建议。
 - `docs/checklists/`: 每个目标的操作检查单和验收记录。
 - `docs/sessions/`: 仅在用户要求归档或退出时写入会话日志。
+- `canon_shutter/`: 独立佳能 BLE 快门固件、本机 USB 网页桥和操作说明，与机械臂控制分开。
 
 ## 当前状态
 
+- 活跃分支：`feature/esp32-canon-shutter`，XIAO 蓝牙快门 0.1.1 已实现并烧录，网页运行在 `http://127.0.0.1:8023/`；已实机配对 `seeedr6` 并收到 3 次快门写入成功，实际照片仍待用户确认。原分支的 4 个 `gravity_console` 未提交改动保留，不纳入快门功能提交。
 - 活跃分支：`feature/payload-identification`，用于规划并验证通过安全慢动作/准静态数据辨识相机重量和质心；`feature/gravity-console` 已记录全局重力补偿网页和实测复盘。
 - 已完成功能：
   - 建立本地仓库并绑定远程 `https://github.com/Allenkzl/reBotArm-Camera.git`。
@@ -53,6 +56,9 @@
 
 ## 重要约定
 
+- XIAO 快门第一版链路是本机网页 → USB CDC → ESP32 BLE → Canon，相机与 XIAO 无线，电脑与 XIAO 仍需 USB；尚未实现板端 Wi-Fi 网页。启动命令 `python3 canon_shutter/server.py`，仅监听 `127.0.0.1:8023`，按 USB 序列号绑定本次 XIAO。启动、重连、网页刷新均不自动发送快门；“指令已发送”不等于照片已保存。
+- XIAO 的已验证设备为 ESP32-S3 / 8MB Flash，USB `303a:1001`、序列号 `28:84:85:B4:0A:34`，当前串口 `/dev/cu.usbmodem11301`。烧录前需先停止并确认本项目网页服务释放串口；原 8MB flash 备份放在忽略目录 `canon_shutter/backups/`，不得提交或上传。清除配对与普通断开是不同操作，重配同一台相机还需删除相机端旧遥控记录。
+- XIAO 0.1.0 实测出现一次配对结束消息未到达网页、按钮忙碌直到超时的情况；0.1.1 增加 USB TX 缓冲，并在每次状态心跳附带 `last_result`，网页按命令 ID 恢复完成状态，禁止为此重发快门。相机断连会实时禁用拍照，需唤醒/开启相机后手动重连。
 - 本项目中 J7 默认视为已拆除，不再要求 J7 在线，不执行夹爪 open/close/set，也不执行 J7 回零。
 - 目标一只允许只读检查：SSH、USB/CAN 状态、J1-J6 扫描、J1-J6 角度读取、相机固定和线缆人工检查。
 - 主动运动、使能、轨迹执行、重力补偿输出、电机参数写入、固件/校准/Home/URDF 变更，都必须单独确认。
@@ -73,6 +79,7 @@
 
 | 日期 | 分支 | 说明 |
 | --- | --- | --- |
+| 2026-10-15 | feature/esp32-canon-shutter | 实现并烧录 XIAO ESP32S3 Sense 佳能 BLE 快门 0.1.1，新增独立本机网页；完整原 flash 已备份，编译及 12 项测试通过；实机配对 seeedr6 并收到 3 次快门写入成功，修复一次完成消息遗漏后网页持续忙碌的问题；照片与换相机仍待用户验收。 |
 | 2026-09-17 | main | 初始化本地仓库文档，记录相机负载改造目标、安全边界和目标一只读检查计划。 |
 | 2026-09-17 | main | 记录目标一首次只读扫描尝试：相机已安装，但 reComputer 当前无法通过 mDNS 或历史 IP SSH 访问，电机扫描尚未执行。 |
 | 2026-09-17 | main | 记录目标一第二次扫描尝试：远端主机恢复可达，但 SSH 认证失败，电机扫描尚未执行。 |
