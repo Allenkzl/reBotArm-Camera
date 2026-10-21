@@ -32,8 +32,10 @@ LOOSE_KP = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=float)
 LOOSE_KD = np.array([0.35, 0.35, 0.35, 0.35, 0.25, 0.25], dtype=float)
 REPLAY_KP = np.array([8.0, 30.0, 35.0, 22.0, 5.0, 5.0], dtype=float)
 REPLAY_KD = np.array([0.8, 2.0, 2.4, 1.8, 0.4, 0.4], dtype=float)
-SOFT_MIN_DEG = np.array([-55.0, -8.0, -1.5, -70.0, -35.0, -10.0], dtype=float)
-SOFT_MAX_DEG = np.array([55.0, 85.0, 80.0, 70.0, 35.0, 90.0], dtype=float)
+# Supervised camera tests: J4 max +80 deg and J6 min -70 deg.
+# Software replay bounds, not calibrated physical/collision limits.
+SOFT_MIN_DEG = np.array([-55.0, -8.0, -1.5, -70.0, -35.0, -70.0], dtype=float)
+SOFT_MAX_DEG = np.array([55.0, 85.0, 80.0, 80.0, 35.0, 90.0], dtype=float)
 RECORD_EVERY_N = 2
 DEFAULT_CAMERA_PROFILE = "light"
 CAMERA_PROFILES = {
