@@ -1,106 +1,39 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>reBot Joint Gravity Tuner</title>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <main class="shell">
-      <section class="topbar">
-        <div>
-          <p class="eyebrow">reBotArm-Camera</p>
-          <h1>Teach & Replay Console</h1>
-        </div>
-        <div class="status-strip">
-          <span id="modeBadge" class="badge">idle</span>
-          <span id="runId">no run</span>
-          <span id="dryRun">live</span>
-        </div>
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>reBot 拍摄工作台</title><link rel="stylesheet" href="/styles.css"></head><body>
+<div id="shooting-studio">
+  <header class="studio-head">
+    <div class="studio-brand"><span class="studio-mark">r.</span><div><div class="studio-wordmark">reBot <span>STUDIO</span></div><div class="studio-sub">机械臂拍摄工作台</div></div></div>
+    <span class="preview-tag" id="connection-label">连接中…</span>
+  </header>
+  <div class="studio-layout">
+    <aside class="control-rail" aria-label="机械臂控制">
+      <div class="section-kicker">机械臂控制</div>
+      <div class="arm-status"><span class="status-dot"></span><span id="studio-status">未使能</span></div>
+      <button type="button" class="studio-button start-control" id="studio-start"><strong>启动机械臂</strong><span>使能机械臂 · 准备录制</span></button>
+      <button type="button" class="studio-button return-control" id="studio-return" disabled><strong>关闭机械臂</strong><span>回到 Home · 然后失能</span></button>
+      <div class="rail-divider"></div>
+      <div class="section-kicker">相机配置</div>
+      <button type="button" class="payload-control" id="studio-payload" aria-expanded="false"><span>额定配重</span><strong>950 <small>g</small></strong><span class="payload-caption">查看配置 </span></button>
+      <div id="payload-detail" hidden><div class="payload-note">当前固定为 950 克。更换相机后，需重新确认补偿配置再用于实机。</div><label class="payload-label" for="payload-rated">相机总重（克）</label><input id="payload-rated" type="number" value="950" disabled><div class="payload-note">第一版使用额定配置</div></div>
+      <div class="rail-divider"></div>
+      <div class="rail-guide"><span class="guide-step">1</span><p>启动机械臂<br><span>手动拖动并录制动作</span></p><span class="guide-step">2</span><p>选择拍摄组<br><span>按顺序播放组内动作</span></p><span class="guide-step">3</span><p>完成后关闭<br><span>Home 零位后失能</span></p></div>
+      <button type="button" id="studio-emergency" class="emergency-control" title="停止播放或录制，保持使能，不直接失能">紧急停止</button>
+    </aside>
+    <main class="studio-main">
+      <div class="workspace-title"><div><div class="section-kicker">SHOOTING SEQUENCES</div><h1>拍摄组</h1></div><button type="button" class="studio-button secondary" id="studio-add-group">新增拍摄组</button></div>
+      <nav id="studio-groups" class="group-nav" aria-label="拍摄组选择"></nav>
+      <section class="sequence-sheet" aria-label="当前拍摄组">
+        <div class="sequence-top"><div class="group-title-area"><label for="studio-group-name" class="section-kicker">当前拍摄组</label><input type="text" id="studio-group-name" aria-label="拍摄组名称" maxlength="24"><span id="studio-summary" class="sequence-summary"></span></div><button type="button" class="studio-button text-button" id="studio-delete-group">删除组</button></div>
+        <div class="sequence-toolbar"><label for="studio-gap" class="interval-field"><span>动作间隔</span><span class="interval-input"><input id="studio-gap" type="number" value="5" min="0" max="60" step="1"><span>秒</span></span></label><span class="interval-description">前一个动作完成后，等待再执行下一个</span><button type="button" id="studio-play-group" class="studio-button play-control"><span>播放整组</span></button></div>
+        <div id="studio-progress" class="sequence-progress" hidden><div id="studio-progress-label" aria-live="polite"></div><div class="sequence-progress-track"><div id="studio-progress-fill"></div></div></div>
+        <div class="sequence-columns"><span>执行顺序 / 动作</span><span>录制与预览</span></div>
+        <div id="studio-blocks" class="action-list"></div>
+        <button type="button" class="add-action" id="studio-add-action">新增动作块</button>
+        <div class="sequence-bottom"><span id="studio-order"></span><span>整组播放后停留，点击「关闭机械臂」完成收尾</span></div>
       </section>
-
-      <section class="workspace">
-        <section class="panel status-panel">
-          <div id="modeCard" class="mode-card dry">
-            <span id="modeTitle">DRY-RUN</span>
-            <strong id="modeText">simulation console</strong>
-          </div>
-          <div class="readout">
-            <span>Current pose</span>
-            <strong id="poseSummary">--</strong>
-          </div>
-          <div class="readout">
-            <span>Log</span>
-            <strong id="logPath">no log</strong>
-          </div>
-          <p id="message" class="message">ready</p>
-          <div class="actions">
-            <button id="startBtn" class="primary">Start tuning</button>
-            <button id="applyBtn">Apply sliders</button>
-            <button id="stopBtn">Stop loose hold</button>
-            <button id="homeBtn">Home disable</button>
-            <button id="estopBtn" class="danger">Emergency disable</button>
-          </div>
-        </section>
-
-        <section class="panel tuner-panel">
-          <div class="panel-head">
-            <div>
-              <h2>Per-Joint Compensation</h2>
-              <p>URDF model only. Sliders scale each joint's current gravity estimate.</p>
-            </div>
-            <button id="reset80Btn">All 80%</button>
-          </div>
-          <div id="jointControls" class="joint-controls"></div>
-        </section>
-
-        <section class="panel trajectories-panel">
-          <div class="panel-head">
-            <div>
-              <h2>Teach Trajectories</h2>
-              <p>Record Home to target and back Home. Each slot can replay its full path.</p>
-            </div>
-          </div>
-          <div class="camera-profile">
-            <div class="camera-switch" role="group" aria-label="Camera profile">
-              <button id="lightCameraBtn" data-camera-profile="light" class="active">Light Camera</button>
-              <button id="heavyCameraBtn" data-camera-profile="heavy">Heavy Camera (950 g)</button>
-            </div>
-            <p id="cameraProfileText">Light Camera selected</p>
-          </div>
-          <div id="trajectoryCards" class="trajectory-cards"></div>
-          <button id="addTrajectoryBtn" class="add-track">Add trajectory</button>
-        </section>
-
-        <section class="panel telemetry">
-          <div class="panel-head">
-            <h2>Telemetry</h2>
-            <span>Nm values update from the live loop</span>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Joint</th>
-                <th>deg</th>
-                <th>scale</th>
-                <th>model Nm</th>
-                <th>cmd Nm</th>
-              </tr>
-            </thead>
-            <tbody id="telemetryBody"></tbody>
-          </table>
-        </section>
-
-        <section class="panel log-panel">
-          <div class="panel-head">
-            <h2>Run Log</h2>
-            <span>latest events</span>
-          </div>
-          <div id="events" class="events"></div>
-        </section>
-      </section>
+      <div class="studio-message" id="studio-message" role="status" aria-live="polite">正在读取机械臂状态…</div>
+      <details class="runtime-details"><summary>运行详情</summary><p id="runtime-summary"></p><div id="runtime-joints" class="runtime-joints"></div><p id="runtime-profile"></p><button type="button" id="direct-disable" class="studio-button">紧急失能</button><p class="payload-note">紧急停止会停止当前动作并保持使能；紧急失能会立即卸去支撑力，必须先人工支撑机械臂。</p><div id="runtime-events" role="log" aria-label="运行事件"></div></details>
     </main>
-    <script src="/app.js"></script>
-  </body>
-</html>
+  </div>
+</div>
+<script src="/app.js"></script></body></html>

@@ -20,6 +20,13 @@ from urllib.parse import urlparse
 
 import numpy as np
 
+if __package__:
+    from .shooting_groups import ShootingGroupStore, atomic_write_json
+    from .shooting_control import ShootingControl, MotionCancelled
+else:
+    from shooting_groups import ShootingGroupStore, atomic_write_json
+    from shooting_control import ShootingControl, MotionCancelled
+
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
@@ -37,7 +44,7 @@ REPLAY_KD = np.array([0.8, 2.0, 2.4, 1.8, 0.4, 0.4], dtype=float)
 SOFT_MIN_DEG = np.array([-55.0, -8.0, -1.5, -70.0, -35.0, -70.0], dtype=float)
 SOFT_MAX_DEG = np.array([55.0, 100.0, 80.0, 80.0, 35.0, 90.0], dtype=float)
 RECORD_EVERY_N = 2
-DEFAULT_CAMERA_PROFILE = "light"
+DEFAULT_CAMERA_PROFILE = "heavy"
 CAMERA_PROFILES = {
     "light": {
         "label": "Light Camera",
@@ -56,7 +63,7 @@ CAMERA_PROFILES = {
     },
 }
 MAX_PERCENT_DEFAULT = 200.0
-MAX_TRAJECTORY_SLOTS = 20
+MAX_TRAJECTORY_SLOTS = 400
 
 
 def now_ms() -> int:
@@ -157,8 +164,11 @@ class RobotStatus:
     trajectories: list[dict[str, Any]] = field(default_factory=list)
     recording_slot: int | None = None
     recording_samples: int = 0
+    shooting_groups: list[dict[str, Any]] = field(default_factory=list)
+    group_playback: dict[str, Any] | None = None
     message: str = "ready"
     updated_ms: int = field(default_factory=now_ms)
+    revision: int = 0
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -183,12 +193,20 @@ class RobotStatus:
             "trajectories": self.trajectories,
             "recording_slot": self.recording_slot,
             "recording_samples": self.recording_samples,
+            "shooting_groups": self.shooting_groups,
+            "group_playback": self.group_playback,
+            "rated_camera_kg": 0.95,
             "message": self.message,
             "updated_ms": self.updated_ms,
+            "revision": self.revision,
         }
 
 
-class GravityConsole:
+class GravityConsole(ShootingControl):
+    command_clamp_nm = COMMAND_CLAMP_NM
+    replay_kp = REPLAY_KP
+    replay_kd = REPLAY_KD
+
     def __init__(
         self,
         *,
@@ -198,6 +216,7 @@ class GravityConsole:
         max_percent: float,
         preset_file: Path | None,
         trajectory_file: Path | None,
+        group_file: Path | None = None,
     ) -> None:
         self.robot_root = robot_root
         self.log_dir = log_dir
@@ -210,6 +229,9 @@ class GravityConsole:
         self.recording: dict[str, Any] | None = None
         self._trajectories: list[dict[str, Any]] = []
         self.lock = threading.RLock()
+        self.command_lock = threading.RLock()
+        self.motor_lock = threading.RLock()
+        self.emergency_requested = threading.Event()
         self.events: list[dict[str, Any]] = []
         self.subscribers: list[queue.Queue[dict[str, Any]]] = []
         self.thread: threading.Thread | None = None
@@ -224,6 +246,8 @@ class GravityConsole:
         self._log_file = None
         self._load_presets()
         self._load_trajectories()
+        self._groups = ShootingGroupStore(group_file or log_dir / "shooting_groups.json", self._trajectories)
+        self._set_status(message="准备就绪，请启动机械臂")
 
     def close(self) -> None:
         self.stop_requested.set()
@@ -292,7 +316,10 @@ class GravityConsole:
         with self.lock:
             for key, value in updates.items():
                 setattr(self.status, key, value)
+            if hasattr(self, "_groups"):
+                self.status.shooting_groups = self._groups.snapshot(self._trajectory_summaries())
             self.status.updated_ms = now_ms()
+            self.status.revision += 1
             snapshot = self.status.to_json()
         self._publish({"type": "status", "status": snapshot})
 
@@ -301,6 +328,15 @@ class GravityConsole:
             return
         self._log_file.write(json.dumps({"t_wall": time.time(), **record}, ensure_ascii=False) + "\n")
         self._log_file.flush()
+
+    def _open_run_log(self, prefix: str) -> None:
+        if self._log_file is not None:
+            self._log_file.close()
+        run_id = f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1000000:06d}"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = self.log_dir / f"{run_id}.jsonl"
+        self._log_file = log_path.open("w", buffering=1, encoding="utf-8")
+        self._set_status(run_id=run_id, log_path=str(log_path))
 
     def _load_presets(self) -> None:
         try:
@@ -320,27 +356,17 @@ class GravityConsole:
         )
 
     def _load_trajectories(self) -> None:
-        try:
-            if self.trajectory_file.exists():
-                raw = json.loads(self.trajectory_file.read_text(encoding="utf-8"))
-                trajectories = raw.get("trajectories", raw if isinstance(raw, list) else [])
-                if isinstance(trajectories, list):
-                    self._trajectories = trajectories
-                    self.status.trajectories = self._trajectory_summaries()
-        except Exception as exc:
-            self._event("warn", f"trajectory load failed: {exc!r}")
+        if not self.trajectory_file.exists():
+            return
+        raw = json.loads(self.trajectory_file.read_text(encoding="utf-8"))
+        trajectories = raw.get("trajectories") if isinstance(raw, dict) else raw
+        if not isinstance(trajectories, list) or any(not isinstance(t, dict) for t in trajectories):
+            raise ValueError("轨迹文件无效，原文件未被覆盖")
+        self._trajectories = trajectories
+        self.status.trajectories = self._trajectory_summaries()
 
     def _save_trajectories_file(self) -> None:
-        self.trajectory_file.parent.mkdir(parents=True, exist_ok=True)
-        self.trajectory_file.write_text(
-            json.dumps(
-                {"updated_ms": now_ms(), "trajectories": self._trajectories},
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+        atomic_write_json(self.trajectory_file, {"updated_ms": now_ms(), "trajectories": self._trajectories})
 
     def _trajectory_summaries(self) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
@@ -365,6 +391,8 @@ class GravityConsole:
         raw = data.get("joint_percent", self.settings.joint_percent)
         if not isinstance(raw, list) or len(raw) != 6:
             raise ValueError("joint_percent must be a 6-element list")
+        if not all(math.isfinite(float(x)) for x in raw):
+            raise ValueError("补偿倍率必须是有限数值")
         profile = str(data.get("camera_profile", self.settings.camera_profile) or DEFAULT_CAMERA_PROFILE)
         if profile not in CAMERA_PROFILES:
             raise ValueError(f"camera_profile must be one of {', '.join(CAMERA_PROFILES)}")
@@ -380,6 +408,8 @@ class GravityConsole:
         return {"name": name, **profile}
 
     def _assert_soft_limits(self, q: np.ndarray, *, label: str) -> None:
+        if q.shape != (6,) or not np.all(np.isfinite(q)):
+            raise ValueError(f"{label}: 需要六个有效关节角度")
         q_deg = np.array(deg(q), dtype=float)
         bad = np.where((q_deg < SOFT_MIN_DEG) | (q_deg > SOFT_MAX_DEG))[0]
         if len(bad) > 0:
@@ -399,9 +429,13 @@ class GravityConsole:
 
     def start(self, data: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
+            if self.status.enabled or self.status.mode in ("starting", "homing"):
+                raise RuntimeError("机械臂已经启动或正在关闭")
             if self.thread is not None and self.thread.is_alive():
                 raise RuntimeError("gravity compensation is already running")
             self.settings = self._validated_settings(data)
+            with self.motor_lock:
+                self.emergency_requested.clear()
             self.stop_requested.clear()
             run_id = time.strftime("gc_console_%Y%m%d_%H%M%S")
             self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -436,12 +470,13 @@ class GravityConsole:
                     "kd": LOOSE_KD.tolist(),
                 }
             )
-            self.thread = threading.Thread(target=self._run_loop, name="gravity-console-loop", daemon=True)
+            self.thread = threading.Thread(target=self._run_loop, kwargs={"enable": True}, name="gravity-console-loop", daemon=True)
             self.thread.start()
         self._event("info", f"started joint tuning {self.settings.joint_percent}")
         return self.status.to_json()
 
     def apply(self, data: dict[str, Any]) -> dict[str, Any]:
+        self._editable_groups()
         settings = self._validated_settings(data)
         with self.lock:
             self.settings = settings
@@ -508,6 +543,7 @@ class GravityConsole:
         return self.status.to_json()
 
     def start_recording(self, data: dict[str, Any]) -> dict[str, Any]:
+        self._require_started()
         slot = self._validated_slot(data)
         label = str(data.get("label") or f"Pose {slot}")
         with self.lock:
@@ -590,13 +626,24 @@ class GravityConsole:
             "end_q_deg": samples[-1]["q_deg"],
             "samples": samples,
         }
+        try:
+            self._validate_trajectory(trajectory)
+        except Exception:
+            self._set_status(recording_slot=None, recording_samples=0,
+                             message="录制轨迹无效或超出软件范围，原动作已保留")
+            raise
         with self.lock:
-            self._trajectories = [t for t in self._trajectories if int(t.get("slot", -1)) != int(rec["slot"])]
-            self._trajectories.append(trajectory)
-            self._trajectories.sort(key=lambda t: int(t.get("slot", 99)))
+            candidate = [t for t in self._trajectories if int(t.get("slot", -1)) != int(rec["slot"])] + [trajectory]
+            candidate.sort(key=lambda t: int(t.get("slot", 99)))
+            try:
+                atomic_write_json(self.trajectory_file, {"updated_ms": now_ms(), "trajectories": candidate})
+            except Exception:
+                self._set_status(recording_slot=None, recording_samples=0,
+                                 message="录制保存失败，原动作保留，请检查磁盘后重试")
+                raise
+            self._trajectories = candidate
             self.status.trajectories = self._trajectory_summaries()
             snapshot = self.status.to_json()
-        self._save_trajectories_file()
         self._set_status(
             recording_slot=None,
             recording_samples=0,
@@ -613,50 +660,8 @@ class GravityConsole:
         )
         return self.status.to_json()
 
-    def replay_trajectory(self, data: dict[str, Any]) -> dict[str, Any]:
-        slot = self._validated_slot(data)
-        speed = clamp(float(data.get("speed", 0.35)), 0.1, 1.0)
-        with self.lock:
-            if self.recording is not None:
-                raise RuntimeError("stop recording before replay")
-            trajectory = next((t for t in self._trajectories if int(t.get("slot", -1)) == slot), None)
-            if trajectory is None:
-                raise ValueError(f"Pose {slot} trajectory is not saved")
-            samples = trajectory.get("samples") or []
-            if len(samples) < 8:
-                raise ValueError(f"Pose {slot} trajectory has too few samples")
-            self._assert_trajectory_soft_limits(trajectory)
-            self.settings = self._validated_settings(data)
-            if self.thread is not None and self.thread.is_alive():
-                self.stop_requested.set()
-        if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=8.0)
-        with self.lock:
-            if self.thread is not None and self.thread.is_alive():
-                raise RuntimeError("previous control loop did not stop")
-            self.stop_requested.clear()
-            run_id = time.strftime(f"replay_pose{slot}_%Y%m%d_%H%M%S")
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            log_path = self.log_dir / f"{run_id}.jsonl"
-            self._log_file = log_path.open("w", buffering=1, encoding="utf-8")
-            self._set_status(
-                mode="replay_starting",
-                run_id=run_id,
-                log_path=str(log_path),
-                camera_profile=self.settings.camera_profile,
-                message=f"starting replay Pose {slot} at {int(speed * 100)}%",
-            )
-            self.thread = threading.Thread(
-                target=self._replay_loop,
-                args=(trajectory, speed),
-                name=f"replay-pose-{slot}",
-                daemon=True,
-            )
-            self.thread.start()
-        self._event("info", f"replay requested: Pose {slot}", slot=slot, speed=speed)
-        return self.status.to_json()
-
     def reset_trajectory(self, data: dict[str, Any]) -> dict[str, Any]:
+        self._editable_groups()
         slot = self._validated_slot(data)
         with self.lock:
             if self.recording is not None and int(self.recording.get("slot", -1)) == slot:
@@ -673,33 +678,6 @@ class GravityConsole:
         )
         level = "info" if before != len(self._trajectories) else "warn"
         self._event(level, f"reset Pose {slot} trajectory", slot=slot, trajectory_file=str(self.trajectory_file))
-        return self.status.to_json()
-
-    def stop_hold(self) -> dict[str, Any]:
-        self.stop_requested.set()
-        self._event("warn", "stop requested; holding current pose")
-        if self.thread is not None:
-            self.thread.join(timeout=8.0)
-        return self.status.to_json()
-
-    def emergency_disable(self) -> dict[str, Any]:
-        self.stop_requested.set()
-        self._event("danger", "emergency disable requested")
-        try:
-            if self.robot is not None:
-                self.robot.arm.disable()
-        finally:
-            self._shutdown_robot(self.robot)
-            self.robot = None
-            self._set_status(mode="disabled", enabled=False, message="emergency disabled")
-        return self.status.to_json()
-
-    def home_disable(self) -> dict[str, Any]:
-        self.stop_requested.set()
-        if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=8.0)
-        self._event("warn", "home and disable requested")
-        self._home_and_disable()
         return self.status.to_json()
 
     def _ensure_robot(self) -> Any:
@@ -778,14 +756,22 @@ class GravityConsole:
                 ],
                 dtype=float,
             )
-        assert self.robot is not None
-        return self.robot.arm.get_positions().copy()
+        with self.motor_lock:
+            if self.emergency_requested.is_set():
+                raise MotionCancelled()
+            assert self.robot is not None
+            return self.robot.arm.get_positions().copy()
 
     def _send_mit(self, q: np.ndarray, tau: np.ndarray, *, kp: np.ndarray = LOOSE_KP, kd: np.ndarray = LOOSE_KD) -> None:
-        if self.dry_run:
-            return
-        assert self.robot is not None
-        self.robot.arm.send_mit(q, vel=np.zeros(6), kp=kp, kd=kd, tau=tau)
+        with self.motor_lock:
+            if self.emergency_requested.is_set():
+                raise MotionCancelled()
+            if any(np.asarray(v).shape != (6,) or not np.all(np.isfinite(v)) for v in (q, tau, kp, kd)):
+                raise ValueError("电机指令必须包含六个有限数值")
+            if self.dry_run:
+                return
+            assert self.robot is not None
+            self.robot.arm.send_mit(q, vel=np.zeros(6), kp=kp, kd=kd, tau=tau)
 
     def _record_sample(
         self,
@@ -825,19 +811,23 @@ class GravityConsole:
         if count % 8 == 0:
             self._set_status(recording_slot=slot, recording_samples=count, message=f"recording Pose {slot}: {count} samples")
 
-    def _run_loop(self) -> None:
+    def _run_loop(self, *, enable: bool = False) -> None:
         current_scale = self._effective_scale(self.settings)
         rate_hz = 30.0
         dt = 1.0 / rate_hz
         last_status = 0.0
         t0 = time.time()
         try:
-            if not self.dry_run:
+            self._check_cancel()
+            if enable and not self.dry_run:
                 if self.robot is None:
                     self.robot = self._ensure_robot()
                     self.robot.connect()
-                self.robot.arm.mode_mit()
-                self.robot.arm.enable()
+                with self.motor_lock:
+                    if self.emergency_requested.is_set() or self.stop_requested.is_set():
+                        raise MotionCancelled()
+                    self.robot.arm.mode_mit()
+                    self.robot.arm.enable()
             self._set_status(mode="running", connected=True, enabled=True, message="running")
             while not self.stop_requested.is_set():
                 loop_t = time.time()
@@ -911,6 +901,11 @@ class GravityConsole:
             self._send_mit(q, np.clip(tau_total * current_scale, -COMMAND_CLAMP_NM, COMMAND_CLAMP_NM))
             self._write_log({"kind": "stop_hold", "q_deg": deg(q)})
             self._set_status(mode="holding", enabled=True, q_deg=deg(q), message="stopped and holding current pose")
+        except MotionCancelled:
+            if not self.status.enabled:
+                self._shutdown_robot(self.robot)
+                self.robot = None
+                self._set_status(mode="disabled", connected=False, enabled=False, message="启动已取消")
         except Exception as exc:
             tb = traceback.format_exc()
             self._write_log({"kind": "error", "error": repr(exc), "traceback": tb})
@@ -920,163 +915,6 @@ class GravityConsole:
             if self._log_file is not None:
                 self._log_file.flush()
 
-    def _replay_loop(self, trajectory: dict[str, Any], speed: float) -> None:
-        samples = trajectory.get("samples") or []
-        slot = int(trajectory.get("slot", 0))
-        label = str(trajectory.get("label") or f"Pose {slot}")
-        t0 = time.time()
-        final_target: np.ndarray | None = None
-        try:
-            self._assert_trajectory_soft_limits(trajectory)
-            if not self.dry_run and self.robot is None:
-                self.robot = self._ensure_robot()
-                self.robot.connect()
-            if not self.dry_run and self.robot is not None:
-                self.robot.arm.mode_mit()
-                self.robot.arm.enable()
-            self._set_status(mode="replaying", connected=True, enabled=True, message=f"replaying {label}")
-            self._write_log(
-                {
-                    "kind": "replay_start",
-                    "slot": slot,
-                    "label": label,
-                    "speed": speed,
-                    "sample_count": len(samples),
-                    "source_run_id": trajectory.get("run_id"),
-                    "camera_profile": self.settings.camera_profile,
-                    "kp": REPLAY_KP.tolist(),
-                    "kd": REPLAY_KD.tolist(),
-                }
-            )
-            first_t = float(samples[0]["t"])
-            last_status = 0.0
-            for i, sample in enumerate(samples):
-                if self.stop_requested.is_set():
-                    break
-                target_elapsed = max(0.0, (float(sample["t"]) - first_t) / speed)
-                while time.time() - t0 < target_elapsed:
-                    if self.stop_requested.is_set():
-                        break
-                    time.sleep(max(0.001, min(0.01, target_elapsed - (time.time() - t0))))
-                if self.stop_requested.is_set():
-                    break
-                q_target = np.array(sample["q_rad"], dtype=float)
-                final_target = q_target
-                scale_raw = sample.get("effective_scale")
-                if isinstance(scale_raw, list) and len(scale_raw) == 6:
-                    scale = np.array(scale_raw, dtype=float)
-                else:
-                    scale = self._effective_scale(self.settings)
-                tau_model, tau_payload = self._estimate_payload(q_target)
-                tau_total = tau_model + tau_payload
-                tau_cmd = np.clip(tau_total * scale, -COMMAND_CLAMP_NM, COMMAND_CLAMP_NM)
-                self._send_mit(q_target, tau_cmd, kp=REPLAY_KP, kd=REPLAY_KD)
-                q_actual = self._read_positions(time.time() - t0)
-                if not self.dry_run and time.time() - t0 > 1.0:
-                    err_deg = np.max(np.abs(np.array(deg(q_target)) - np.array(deg(q_actual))))
-                    if err_deg > 20.0:
-                        raise RuntimeError(f"tracking error too large during replay: {err_deg:.1f}deg")
-                self._write_log(
-                    {
-                        "kind": "replay_sample",
-                        "i": i,
-                        "source_t": sample.get("t"),
-                        "q_target_deg": deg(q_target),
-                        "q_actual_deg": deg(q_actual),
-                        "tau_cmd_nm": [float(x) for x in tau_cmd],
-                        "effective_scale": [float(x) for x in scale],
-                        "camera_profile": self.settings.camera_profile,
-                    }
-                )
-                loop_t = time.time()
-                if loop_t - last_status > 0.2:
-                    self._set_status(
-                        mode="replaying",
-                        connected=True,
-                        enabled=True,
-                        q_deg=deg(q_actual),
-                        joint_percent=[float(x) for x in sample.get("joint_percent", self.settings.joint_percent)],
-                        camera_profile=self.settings.camera_profile,
-                        effective_scale=[float(x) for x in scale],
-                        tau_model_nm=[float(x) for x in tau_model],
-                        tau_payload_nm=[float(x) for x in tau_payload],
-                        tau_total_nm=[float(x) for x in tau_total],
-                        tau_cmd_nm=[float(x) for x in tau_cmd],
-                        trajectories=self.status.trajectories,
-                        message=f"replaying {label} {i + 1}/{len(samples)}",
-                    )
-                    last_status = loop_t
-            q_hold = self._read_positions(time.time() - t0)
-            if final_target is not None and not self.stop_requested.is_set():
-                q_hold = final_target
-            tau_model, tau_payload = self._estimate_payload(q_hold)
-            tau_total = tau_model + tau_payload
-            tau_cmd = np.clip(tau_total * self._effective_scale(self.settings), -COMMAND_CLAMP_NM, COMMAND_CLAMP_NM)
-            self._send_mit(q_hold, tau_cmd, kp=REPLAY_KP, kd=REPLAY_KD)
-            self._write_log({"kind": "replay_hold", "q_hold_deg": deg(q_hold), "stopped": self.stop_requested.is_set()})
-            self._set_status(
-                mode="holding",
-                connected=True,
-                enabled=True,
-                q_deg=deg(q_hold),
-                tau_model_nm=[float(x) for x in tau_model],
-                tau_payload_nm=[float(x) for x in tau_payload],
-                tau_total_nm=[float(x) for x in tau_total],
-                tau_cmd_nm=[float(x) for x in tau_cmd],
-                message=f"{label} replay complete; holding",
-            )
-            self._event("info", f"{label} replay complete; holding", slot=slot)
-        except Exception as exc:
-            tb = traceback.format_exc()
-            self._write_log({"kind": "replay_error", "error": repr(exc), "traceback": tb})
-            self._set_status(mode="error", message=repr(exc))
-            self._event("danger", f"replay error: {exc!r}", slot=slot)
-        finally:
-            if self._log_file is not None:
-                self._log_file.flush()
-
-    def _home_and_disable(self) -> None:
-        self._set_status(mode="homing", message="homing to zero")
-        run_robot = self.robot
-        if run_robot is None and not self.dry_run:
-            run_robot = self._ensure_robot()
-            run_robot.connect()
-            run_robot.arm.mode_mit()
-            run_robot.arm.enable()
-        try:
-            if self.dry_run:
-                time.sleep(1.0)
-                self._set_status(mode="disabled", enabled=False, q_deg=[0.0] * 6, message="dry-run home disabled")
-                return
-            assert run_robot is not None
-            q0 = run_robot.arm.get_positions().copy()
-            home = np.zeros(6)
-            kp = np.array([50.0, 150.0, 150.0, 50.0, 50.0, 50.0], dtype=float)
-            kd = np.array([3.0, 10.0, 10.0, 5.0, 4.0, 4.0], dtype=float)
-            max_err = float(np.max(np.abs(home - q0)))
-            duration = max(4.0, 2.0 * max_err / 0.22)
-            steps = max(2, int(duration * 50.0))
-            self._write_log({"kind": "home_start", "q0_deg": deg(q0), "steps": steps, "duration_s": duration})
-            for i in range(steps):
-                s = (i + 1) / steps
-                q = q0 + (home - q0) * minimum_jerk(s)
-                tau_model, tau_payload = self._estimate_payload(q)
-                tau = tau_model + tau_payload
-                run_robot.arm.send_mit(q, vel=np.zeros(6), kp=kp, kd=kd, tau=tau)
-                if i % 20 == 0:
-                    self._set_status(mode="homing", q_deg=deg(q), message="homing")
-                time.sleep(duration / steps)
-            run_robot.arm.send_mit(home, vel=np.zeros(6), kp=kp, kd=kd, tau=np.zeros(6))
-            time.sleep(0.8)
-            q_before = run_robot.arm.get_positions().copy()
-            run_robot.arm.disable()
-            self._write_log({"kind": "home_disable", "q_before_disable_deg": deg(q_before)})
-            self._set_status(mode="disabled", enabled=False, q_deg=deg(q_before), message="home disabled")
-            self._event("info", "home disabled")
-        finally:
-            self._shutdown_robot(run_robot)
-            self.robot = None
-            self._set_status(connected=False)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1107,7 +945,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/status":
-            self._send_json(self.app.status.to_json())
+            with self.app.lock:
+                self._send_json(self.app.status.to_json())
             return
         if parsed.path == "/api/events":
             self._events()
@@ -1149,35 +988,47 @@ class Handler(BaseHTTPRequestHandler):
             self.app.unsubscribe(q)
 
     def do_POST(self) -> None:
-        parsed = urlparse(self.path)
+        path = urlparse(self.path).path
         try:
             data = self._read_json()
-            if parsed.path == "/api/start":
-                self._send_json(self.app.start(data))
-            elif parsed.path == "/api/apply":
-                self._send_json(self.app.apply(data))
-            elif parsed.path == "/api/save-preset":
-                self._send_json(self.app.save_preset(data))
-            elif parsed.path == "/api/apply-preset":
-                self._send_json(self.app.apply_preset(data))
-            elif parsed.path == "/api/start-recording":
-                self._send_json(self.app.start_recording(data))
-            elif parsed.path == "/api/stop-recording":
-                self._send_json(self.app.stop_recording(data))
-            elif parsed.path == "/api/replay-trajectory":
-                self._send_json(self.app.replay_trajectory(data))
-            elif parsed.path == "/api/reset-trajectory":
-                self._send_json(self.app.reset_trajectory(data))
-            elif parsed.path == "/api/stop":
-                self._send_json(self.app.stop_hold())
-            elif parsed.path == "/api/home-disable":
-                self._send_json(self.app.home_disable())
-            elif parsed.path == "/api/emergency-disable":
-                self._send_json(self.app.emergency_disable())
-            else:
-                self.send_error(HTTPStatus.NOT_FOUND)
+            if not isinstance(data, dict):
+                raise ValueError("请求必须为 JSON 对象")
+            if path == "/api/emergency-disable":
+                self.app.emergency_requested.set()
+                self.app.stop_requested.set()
+            with self.app.command_lock:
+                result = self._dispatch_post(path, data)
+            self._send_json(result)
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=400)
+
+    def _dispatch_post(self, path: str, data: dict[str, Any]) -> dict[str, Any]:
+        action = path.removeprefix("/api/")
+        if action in {"groups/add", "groups/update", "groups/delete", "blocks/add", "blocks/update", "blocks/delete"}:
+            return self.app.groups_command(action, data)
+        routes = {
+            "/api/start": self.app.start,
+            "/api/apply": self.app.apply,
+            "/api/save-preset": self.app.save_preset,
+            "/api/apply-preset": self.app.apply_preset,
+            "/api/start-recording": self.app.start_recording,
+            "/api/stop-recording": self.app.stop_recording,
+            "/api/replay-trajectory": self.app.replay_trajectory,
+            "/api/reset-trajectory": self.app.reset_trajectory,
+            "/api/blocks/record": self.app.record_block,
+            "/api/blocks/stop-recording": self.app.stop_block_recording,
+            "/api/blocks/play": self.app.play_block,
+            "/api/groups/play": self.app.play_group,
+        }
+        if path in routes:
+            return routes[path](data)
+        if path == "/api/stop":
+            return self.app.stop_hold()
+        if path == "/api/home-disable":
+            return self.app.home_disable()
+        if path == "/api/emergency-disable":
+            return self.app.emergency_disable()
+        raise ValueError("未知接口")
 
 
 def main() -> int:
@@ -1188,6 +1039,7 @@ def main() -> int:
     parser.add_argument("--log-dir", type=Path, default=Path("logs/runs"))
     parser.add_argument("--preset-file", type=Path, default=None)
     parser.add_argument("--trajectory-file", type=Path, default=None)
+    parser.add_argument("--group-file", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-percent", type=float, default=MAX_PERCENT_DEFAULT)
     args = parser.parse_args()
@@ -1199,6 +1051,7 @@ def main() -> int:
         max_percent=args.max_percent,
         preset_file=args.preset_file,
         trajectory_file=args.trajectory_file,
+        group_file=args.group_file,
     )
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.app = app  # type: ignore[attr-defined]
