@@ -17,3 +17,13 @@
 部署前远端 disabled/enabled=false/connected=false。按精确旧文本仅替换范围常量及注释，候选模块在内存中对远端三条轨迹进行同一套检查：Pose 1=139 样本、Pose 2=187 样本、Pose 3=208 样本，均通过。轨迹文件 SHA-256 前后均为 `f4a93bbb6e7f978844e99948e72f46812b57e97966b8366d1ab86658fb05ecce`。
 
 部署备份：`/home/com/reBotArm-Camera/logs/deployment-backups/trajectory-soft-limits-20261021_113113/`。新网页进程 PID 888829，日志 `/home/com/reBotArm-Camera/logs/runs/web_soft_limits_20261021_113113.log`。恢复 heavy profile 与原倍率 80%，接口确认 idle/enabled=false、950 g 总重/150 g 增量；未调用回放、Start 或 Home。用户实机验收待完成。
+
+## J2 上限追加修正
+
+用户继续测试后网页报 `Pose 2 outside soft limits: J2=85.8deg`；记录最大 J2=92.156°，实际旧软件上限为 +85°。用户要求放宽到 100°，本次针对 J2 上限改为 +100°，其余范围沿用上一轮。URDF J2 上限约 +180°，但没有据此验证相机/线缆/臂段碰撞边界；用户旁护仍不能替代这些验证。
+
+执行顺序：先完成离线边界和轨迹检查；检查时远端 running/enabled=true，因此在用户完成安全收尾且远端确认 disabled/idle、enabled=false、connected=false 前，不上传或重启控制服务。只部署参数，不自动回放。
+
+用户回复“已停止”后脚本复核失能，完成部署。Python 编译/差异检查及离线边界测试通过：接受 J2=85.8/92.156/99.99°，拒绝 J2=100.01°，J4/J6 上下界仍生效。三条现有轨迹（170/184/205 样本）离线检查全部通过；轨迹哈希前后为 `4aa7cfa7f7462fb57417afa893cba894f6bcd647d5276ca4d657647df95cbca8`。
+
+备份 `/home/com/reBotArm-Camera/logs/deployment-backups/trajectory-j2-100-20261021_114353/`，新进程 PID 889353，日志 `/home/com/reBotArm-Camera/logs/runs/web_soft_limits_20261021_114353.log`。重启后 idle/enabled=false，保留 heavy/950 g 参数和原补偿倍率；未执行轨迹，待用户实机测试。
