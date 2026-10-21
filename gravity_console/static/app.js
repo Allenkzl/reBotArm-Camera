@@ -23,10 +23,13 @@
     if (['danger','error'].includes(event.level)) note(event.message || '运行异常', true);
   }
   function update(next) {
+    const firstSnapshot = !Object.hasOwn(status, 'updated_ms');
     const nextTime = Number(next.updated_ms) || 0, currentTime = Number(status.updated_ms) || 0;
     const nextRevision = Number(next.revision) || 0, currentRevision = Number(status.revision) || 0;
     if (nextTime < currentTime || (nextTime === currentTime && nextRevision < currentRevision)) return false;
-    status = next; online = true; lastReceived = Date.now(); render(); return true;
+    status = next; online = true; lastReceived = Date.now(); render();
+    if (firstSnapshot) note(status.enabled ? '已连接机械臂服务，请确认当前运行状态' : '已连接，点击「启动机械臂」开始操作');
+    return true;
   }
   async function mutate(path, data = {}, success = '操作已提交') {
     if (blocked() || !online) return;
