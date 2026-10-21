@@ -137,6 +137,10 @@ class ShootingControl:
         self._join_worker()
         self._prepare_worker()
         self._open_run_log("shooting_group" if group else "replay")
+        if group:
+            self._write_log({"kind": "group_plan", "group_id": group["id"],
+                             "blocks": [{"id": b["id"], "name": b["name"], "slot": b["slot"]} for b in group["blocks"]],
+                             "skipped_empty_blocks": group.get("skipped_empty_blocks", [])})
         self._playback_hold_scale = self._effective_scale(self.settings)
         self._set_status(mode="replay_starting", group_playback=None, message="正在准备播放")
         self.thread = threading.Thread(target=self._sequence_loop, args=(trajectories, speed, group),
@@ -153,9 +157,15 @@ class ShootingControl:
         self._require_started()
         with self.lock:
             group = copy.deepcopy(self._groups.resolve_group(data.get("group_id")))
+            saved_slots = {t["slot"] for t in self._trajectories}
+            skipped = [b["name"] for b in group["blocks"] if b["slot"] not in saved_slots]
+            group["blocks"] = [b for b in group["blocks"] if b["slot"] in saved_slots]
+            if not group["blocks"]:
+                raise ValueError("本组暂无已保存动作，请先完成录制")
             trajectories = [self._trajectory_for_slot(block["slot"]) for block in group["blocks"]]
             for trajectory, block in zip(trajectories, group["blocks"]):
                 trajectory["label"] = block["name"]
+            group["skipped_empty_blocks"] = skipped
         return self._play_request(trajectories, float(data.get("speed", .25)), group)
 
     def _check_cancel(self) -> None:

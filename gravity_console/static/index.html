@@ -25,6 +25,7 @@
       <section class="sequence-sheet" aria-label="当前拍摄组">
         <div class="sequence-top"><div class="group-title-area"><label for="studio-group-name" class="section-kicker">当前拍摄组</label><input type="text" id="studio-group-name" aria-label="拍摄组名称" maxlength="24"><span id="studio-summary" class="sequence-summary"></span></div><button type="button" class="studio-button text-button" id="studio-delete-group">删除组</button></div>
         <div class="sequence-toolbar"><label for="studio-gap" class="interval-field"><span>动作间隔</span><span class="interval-input"><input id="studio-gap" type="number" value="5" min="0" max="60" step="1"><span>秒</span></span></label><span class="interval-description">前一个动作完成后，等待再执行下一个</span><button type="button" id="studio-play-group" class="studio-button play-control"><span>播放整组</span></button></div>
+        <p id="studio-play-hint" class="group-play-hint" role="status"></p>
         <div id="studio-progress" class="sequence-progress" hidden><div id="studio-progress-label" aria-live="polite"></div><div class="sequence-progress-track"><div id="studio-progress-fill"></div></div></div>
         <div class="sequence-columns"><span>执行顺序 / 动作</span><span>录制与预览</span></div>
         <div id="studio-blocks" class="action-list"></div>

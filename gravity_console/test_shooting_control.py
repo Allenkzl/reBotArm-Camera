@@ -81,6 +81,39 @@ class ShootingControlTests(unittest.TestCase):
             send.assert_not_called()
         self.assertIsNone(self.app.thread)
 
+    def test_sparse_group_plays_saved_blocks_in_original_order(self):
+        self.ready()
+        group = self.group(count=4, interval=0)
+        self.app._trajectories = [trajectory(1), trajectory(3)]
+        plan = []
+        with patch.object(self.app, "_read_positions", return_value=np.zeros(6)), \
+             patch.object(self.app, "_play_trajectory_block", side_effect=lambda tr, speed: (plan.append((tr["slot"],self.app.status.group_playback["block_id"])) or np.zeros(6))):
+            self.app.play_group({"group_id": group["id"]})
+            self.join()
+        self.assertEqual(plan, [(1,group["blocks"][0]["id"]),(3,group["blocks"][2]["id"])])
+        self.assertEqual(self.app.status.mode, "holding")
+
+    def test_all_empty_group_rejects_without_starting_worker(self):
+        self.ready()
+        group = self.app._groups.groups[0]
+        with patch.object(self.app, "_join_worker") as join:
+            with self.assertRaisesRegex(ValueError,"暂无已保存"):
+                self.app.play_group({"group_id":group["id"]})
+            join.assert_not_called()
+        self.assertIsNone(self.app.thread)
+
+    def test_failed_recording_reports_joint_range_and_clears_on_success(self):
+        self.ready()
+        self.app.recording = {"slot":1,"label":"测试动作","run_id":"test","samples":trajectory(1)["samples"]}
+        self.app.recording["samples"][2]["q_rad"][5] = np.deg2rad(-107)
+        with self.assertRaisesRegex(RuntimeError,"J6"):
+            self.app.stop_recording({"slot":1})
+        self.assertIn("允许 -70°",self.app.status.recording_errors["1"])
+        self.assertIsNone(self.app.status.recording_slot)
+        self.app.recording = {"slot":1,"label":"测试动作","run_id":"test","samples":trajectory(1)["samples"]}
+        self.app.stop_recording({"slot":1})
+        self.assertNotIn("1",self.app.status.recording_errors)
+
     def test_real_short_dryrun_order_and_intervals_only_between(self):
         self.ready()
         group = self.group(interval=.01)

@@ -164,6 +164,7 @@ class RobotStatus:
     trajectories: list[dict[str, Any]] = field(default_factory=list)
     recording_slot: int | None = None
     recording_samples: int = 0
+    recording_errors: dict[str, str] = field(default_factory=dict)
     shooting_groups: list[dict[str, Any]] = field(default_factory=list)
     group_playback: dict[str, Any] | None = None
     message: str = "ready"
@@ -193,6 +194,7 @@ class RobotStatus:
             "trajectories": self.trajectories,
             "recording_slot": self.recording_slot,
             "recording_samples": self.recording_samples,
+            "recording_errors": dict(self.recording_errors),
             "shooting_groups": self.shooting_groups,
             "group_playback": self.group_playback,
             "rated_camera_kg": 0.95,
@@ -413,7 +415,7 @@ class GravityConsole(ShootingControl):
         q_deg = np.array(deg(q), dtype=float)
         bad = np.where((q_deg < SOFT_MIN_DEG) | (q_deg > SOFT_MAX_DEG))[0]
         if len(bad) > 0:
-            names = ", ".join(f"{JOINT_NAMES[i]}={q_deg[i]:.1f}deg" for i in bad)
+            names = ", ".join(f"{JOINT_NAMES[i]}={q_deg[i]:.1f}°（允许 {SOFT_MIN_DEG[i]:g}°～{SOFT_MAX_DEG[i]:g}°）" for i in bad)
             raise RuntimeError(f"{label} outside soft limits: {names}")
 
     def _assert_trajectory_soft_limits(self, trajectory: dict[str, Any]) -> None:
@@ -609,8 +611,11 @@ class GravityConsole(ShootingControl):
             self.recording = None
         samples = rec.get("samples") or []
         if len(samples) < 8:
-            self._set_status(recording_slot=None, recording_samples=0, message="recording discarded; too few samples")
-            raise RuntimeError("recording is too short; keep it running for at least one second")
+            error = "录制太短，请至少录制一秒后再结束"
+            self.status.recording_errors[str(rec["slot"])] = error
+            self._set_status(recording_slot=None, recording_samples=0, message=error)
+            self._event("danger", error, slot=rec["slot"])
+            raise RuntimeError(error)
         duration_s = float(samples[-1]["t"] - samples[0]["t"])
         if duration_s <= 0:
             duration_s = 0.0
@@ -628,20 +633,24 @@ class GravityConsole(ShootingControl):
         }
         try:
             self._validate_trajectory(trajectory)
-        except Exception:
+        except Exception as exc:
+            self.status.recording_errors[str(rec["slot"])] = str(exc)
             self._set_status(recording_slot=None, recording_samples=0,
-                             message="录制轨迹无效或超出软件范围，原动作已保留")
+                             message=f"录制未保存：{exc}；原有动作保留")
+            self._event("danger", f"录制未保存：{exc}", slot=rec["slot"])
             raise
         with self.lock:
             candidate = [t for t in self._trajectories if int(t.get("slot", -1)) != int(rec["slot"])] + [trajectory]
             candidate.sort(key=lambda t: int(t.get("slot", 99)))
             try:
                 atomic_write_json(self.trajectory_file, {"updated_ms": now_ms(), "trajectories": candidate})
-            except Exception:
+            except Exception as exc:
+                self.status.recording_errors[str(rec["slot"])] = "保存失败，请检查磁盘后重试"
                 self._set_status(recording_slot=None, recording_samples=0,
                                  message="录制保存失败，原动作保留，请检查磁盘后重试")
                 raise
             self._trajectories = candidate
+            self.status.recording_errors.pop(str(rec["slot"]), None)
             self.status.trajectories = self._trajectory_summaries()
             snapshot = self.status.to_json()
         self._set_status(

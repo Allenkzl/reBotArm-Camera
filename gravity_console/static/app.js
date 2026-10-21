@@ -13,6 +13,8 @@
   const active = () => recording() || !!status.group_playback || ['starting','replaying','replay_starting','group_waiting','homing'].includes(status.mode);
   const editable = () => online && !blocked() && !active();
   const ready = () => online && !blocked() && status.enabled === true && (status.connected === true || status.dry_run === true) && ['running','holding'].includes(status.mode) && !active();
+  const playbackHint = () => !online ? '网页服务未连接' : !status.enabled ? '请先启动机械臂' : blocked() ? '请等待当前请求完成' : active() ? '请先结束录制或停止当前动作' : !['running','holding'].includes(status.mode) ? '请先处理机械臂异常状态' : '';
+  const recordingError = slot => String(status.recording_errors?.[String(slot)] || '').replace(/outside soft limits/gi, '超出软件范围').replace(/deg/g, '°');
   const isRecording = block => recording() && block.slot != null && Number(block.slot) === Number(status.recording_slot);
   const note = (message, error = false) => { $('#studio-message').textContent = message; $('#studio-message').dataset.error = String(error); };
   function eventLog(event) {
@@ -77,17 +79,32 @@
     $('#studio-summary').textContent = g ? `${g.blocks.length} 个动作 · ${recorded} 个已录制` : '等待拍摄组数据';
     const playing = !!status.group_playback || ['replaying','replay_starting','group_waiting'].includes(status.mode);
     $('#studio-play-group').textContent = playing ? '停止播放' : '播放整组';
-    $('#studio-play-group').disabled = playing ? !online || blocked() : !g || !ready() || !g.blocks.length || recorded !== g.blocks.length;
-    const nextRows = JSON.stringify([g,online,blocked(),busy,enabled,status.connected,status.dry_run,status.recording_slot,status.group_playback?.block_id]);
+    $('#studio-play-group').disabled = playing ? !online || blocked() : !g || !ready() || recorded === 0;
+    const skipped = (g?.blocks.length || 0) - recorded;
+    $('#studio-play-hint').textContent = playing ? '停止后保持使能，可继续录制或关闭机械臂。' : `${playbackHint() ? playbackHint() + ' · ' : ''}将按顺序播放 ${recorded} 个已保存动作，跳过 ${skipped} 个空动作${recorded ? '' : '；请先录制动作'}。`;
+    const nextRows = JSON.stringify([g,online,blocked(),busy,enabled,status.mode,status.connected,status.dry_run,status.recording_slot,status.group_playback?.block_id,status.recording_errors]);
     if (nextRows !== rowsKey) {
       $('#studio-blocks').innerHTML = g ? g.blocks.map((block,index) => {
         const rec = isRecording(block), selected = String(status.group_playback?.block_id) === String(block.id), trajectory = block.trajectory;
-        return `<div class="action-row ${rec || selected ? 'is-active':''}"><span class="action-index">${String(index+1).padStart(2,'0')}</span><div class="action-content"><input class="action-name" data-name="${esc(block.id)}" aria-label="动作 ${index+1} 名称" value="${esc(block.name)}" maxlength="60" ${!editable()?'disabled':''}><div class="action-meta"><span class="record-dot"></span><span class="${rec?'recording-label':''}" ${rec?'id="recording-meta"':''}>${rec ? '正在录制' : trajectory ? `已录制 · ${Number(trajectory.duration_s).toFixed(1)} 秒 · ${Number(trajectory.sample_count)||0} 点` : '尚未录制'}</span><span>J1–J6 轨迹</span></div></div><div class="action-tools"><button type="button" class="small-button" data-record="${esc(block.id)}" ${rec ? (!online||blocked()?'disabled':'') : (!ready()?'disabled':'')}>${rec?'结束录制':trajectory?'重新录制':'录制动作'}</button><button type="button" class="small-button" data-play="${esc(block.id)}" ${!ready()||!trajectory?'disabled':''}>单独播放</button><button type="button" class="delete-action" data-remove="${esc(block.id)}" aria-label="删除动作 ${index+1}" ${!editable()||g.blocks.length<=1?'disabled':''}>×</button></div></div>`;
+        const error = recordingError(block.slot), hint = playbackHint();
+        return `<div class="action-row ${rec || selected ? 'is-active':''}">
+          <span class="action-index">${String(index+1).padStart(2,'0')}</span>
+          <div class="action-content">
+            <input class="action-name" data-name="${esc(block.id)}" aria-label="动作 ${index+1} 名称" value="${esc(block.name)}" maxlength="60" ${!editable()?'disabled':''}>
+            <div class="action-meta"><span class="record-dot"></span><span class="${rec?'recording-label':''}" ${rec?'id="recording-meta"':''}>${rec ? '正在录制' : trajectory ? `已保存 · ${Number(trajectory.duration_s).toFixed(1)} 秒 · ${Number(trajectory.sample_count)||0} 点` : '暂无已保存录制'}</span><span>J1–J6 轨迹</span></div>
+            ${error ? `<p class="recording-error" role="status">录制未保存：${esc(error)}${trajectory ? '；原有已保存轨迹仍保留，播放将使用原轨迹。' : '；请调整姿态后重新录制。'}</p>` : ''}
+          </div>
+          <div class="action-tools">
+            <button type="button" class="small-button" data-record="${esc(block.id)}" ${rec ? (!online||blocked()?'disabled':'') : (!ready()?'disabled':'')}>${rec?'结束录制':trajectory?'重新录制':'录制动作'}</button>
+            ${trajectory ? `<button type="button" class="small-button" data-play="${esc(block.id)}" ${!ready()?'disabled':''} title="${esc(hint || '播放此动作的已保存轨迹')}">单独播放</button>${hint ? `<span class="play-hint">${esc(hint)}</span>` : ''}` : ''}
+            <button type="button" class="delete-action" data-remove="${esc(block.id)}" aria-label="删除动作 ${index+1}" ${!editable()||g.blocks.length<=1?'disabled':''}>×</button>
+          </div>
+        </div>`;
       }).join('') : '<p class="empty-state">正在读取拍摄组…</p>';
       rowsKey = nextRows;
     }
     if ($('#recording-meta')) $('#recording-meta').textContent = `正在录制 · ${Number(status.recording_samples)||0} 点`;
-    $('#studio-order').textContent = g?.blocks.map((_,index)=>String(index+1).padStart(2,'0')).join(' → ') || '';
+    $('#studio-order').textContent = g?.blocks.map((block,index)=>block.trajectory ? String(index+1) : null).filter(Boolean).join(' → ') || '暂无已保存动作';
     const playback = status.group_playback;
     $('#studio-progress').hidden = !playing;
     if (playback) {
@@ -122,13 +139,26 @@
   $('#studio-group-name').onchange = event => { const name=event.target.value.trim(); if(!name){render();return;} mutate('/api/groups/update',{...ids(),name},'拍摄组名称已保存'); };
   $('#studio-gap').onchange = event => { const value=Number(event.target.value); if(event.target.value==='' || !Number.isFinite(value) || value<0 || value>60){note('动作间隔请填写 0–60 秒',true);event.target.value=group()?.interval_s??5;return;} mutate('/api/groups/update',{...ids(),interval_s:value},'动作间隔已保存'); };
   $('#studio-add-action').onclick = () => mutate('/api/blocks/add',ids(),'已新增动作块');
-  $('#studio-play-group').onclick = () => { if(status.group_playback || ['replaying','replay_starting','group_waiting'].includes(status.mode)){mutate('/api/stop',{},'已请求停止播放并保持使能');return;} if(group() && confirm(`按顺序播放「${group().name}」中的 ${group().blocks.length} 个动作？动作间隔 ${group().interval_s} 秒，完成后保持使能。`)) mutate('/api/groups/play',{...ids(),speed:.25},'整组播放已提交'); };
+  $('#studio-play-group').onclick = () => {
+    if (status.group_playback || ['replaying','replay_starting','group_waiting'].includes(status.mode)) { mutate('/api/stop',{},'已请求停止播放并保持使能'); return; }
+    const g = group(); if (!g || !ready()) return;
+    const saved = g.blocks.filter(block=>block.trajectory), empty = g.blocks.filter(block=>!block.trajectory);
+    if (!saved.length) return;
+    const order = g.blocks.flatMap((block,index)=>block.trajectory ? [`${index+1}. ${block.name}${recordingError(block.slot) ? '（本次录制失败，使用原有已保存轨迹）' : ''}`] : []).join(' → ');
+    const skip = empty.length ? `\n将跳过 ${empty.length} 个空动作：${empty.map(block=>block.name).join('、')}。` : '\n组内全部动作均有已保存轨迹，不跳过动作。';
+    if (confirm(`按顺序播放「${g.name}」的 ${saved.length} 个已保存动作？\n执行顺序：${order}${skip}\n动作间隔 ${g.interval_s} 秒，完成后保持使能。`)) mutate('/api/groups/play',{...ids(),speed:.25},'整组播放已提交');
+  };
   $('#studio-blocks').onchange = event => { const input=event.target.closest('[data-name]'); if(input && editable()){const name=input.value.trim();if(!name){rowsKey='';render();return;}mutate('/api/blocks/update',{...ids(input.dataset.name),name},'动作名称已保存');} };
   $('#studio-blocks').onclick = event => {
     const remove=event.target.closest('[data-remove]'), record=event.target.closest('[data-record]'), play=event.target.closest('[data-play]');
     if(remove && editable()){if(confirm('删除这个动作块？此操作不可撤销。'))mutate('/api/blocks/delete',ids(remove.dataset.remove),'动作块已删除');return;}
     if(record){const block=group()?.blocks.find(item=>String(item.id)===record.dataset.record);if(!block)return;if(isRecording(block)){mutate('/api/blocks/stop-recording',ids(block.id),'动作录制已保存');return;}if(!ready())return;if(block.trajectory && !confirm('重新录制将替换此动作的已有轨迹，继续？'))return;mutate('/api/blocks/record',ids(block.id),'正在录制，请手动拖动机械臂，完成后点击结束录制');return;}
-    if(play && ready() && confirm('播放这个动作？机械臂将先移动到记录起点，再执行轨迹。'))mutate('/api/blocks/play',{...ids(play.dataset.play),speed:.25},'动作播放已提交');
+    if (play && ready()) {
+      const block = group()?.blocks.find(item=>String(item.id)===play.dataset.play);
+      if (!block?.trajectory) return;
+      const previous = recordingError(block.slot) ? '\n注意：最近一次录制未保存，将播放原有已保存轨迹。' : '';
+      if (confirm(`播放「${block.name}」？机械臂将先移动到记录起点，再执行轨迹。${previous}`)) mutate('/api/blocks/play',{...ids(play.dataset.play),speed:.25},'动作播放已提交');
+    }
   };
   let polling=false;
   async function poll() {
