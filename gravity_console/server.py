@@ -44,10 +44,13 @@ CAMERA_PROFILES = {
         "note": "Original URDF/gripper-equivalent compensation",
     },
     "heavy": {
-        "label": "Heavy Camera",
-        "payload_kg": 0.4,
+        "label": "Heavy Camera (950 g)",
+        "total_camera_kg": 0.95,
+        # Increment above the existing approximate 800 g URDF-equivalent baseline.
+        # This is a weight correction, not an identified camera/COM model.
+        "payload_kg": 0.15,
         "payload_offset_local_m": [0.075, 0.0, -0.025],
-        "note": "1200g camera: adds about 400g beyond the light/URDF baseline",
+        "note": "950g total camera: adds about 150g beyond the approximate 800g light/URDF baseline; COM estimate unchanged",
     },
 }
 MAX_PERCENT_DEFAULT = 200.0
