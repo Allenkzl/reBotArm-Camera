@@ -13,3 +13,7 @@ Heavy profile 增加总重元数据 0.95 kg，增量从 0.4 改为 0.15 kg；网
 实施结果：Python 编译、JavaScript 语法及 `git diff --check` 通过。临时 localhost dry-run 服务验证页面显示 950 g，`/api/status` 返回总重 0.95 kg、增量 0.15 kg、`enabled=false`；Light 和质心不变，Heavy 额外力矩为旧值的 37.5%。未连接硬件进行主动测试。
 
 远端部署暂未完成：2026-10-21 通过 `com@com-desktop.local` 只读连接时 SSH 返回 `Permission denied (publickey,password)`，因此未上传文件、重启远端服务或执行运动；远端网页可能仍为旧参数。恢复 SSH 访问后应先读 `/api/status` 确认非使能/控制中，再部署本次修正。
+
+后续部署已完成：用户重新登录后复用其 SSH 会话，确认远端 disabled/connected=false，按精确旧文本仅替换 Heavy profile 和按钮，保留远端其他代码。备份位于 `/home/com/reBotArm-Camera/logs/deployment-backups/heavy-camera-950g-20261021_105456/`，新服务 PID 887907，启动日志 `/home/com/reBotArm-Camera/logs/runs/web_950g_20261021_105456.log`。恢复原 profile=heavy 和各关节 80% 设置；未调用 Start/录制/回放/Home。
+
+远端及本机转发接口确认 total_camera_kg=0.95、payload_kg=0.15、enabled=false；刷新 Chrome 后页面显示 `Heavy Camera (950 g)` 及 150 g 增量说明，三条轨迹仍在。轨迹文件 SHA-256 更新前后均为 `a2848723520ceb60de3b24dfbd47083a55424a1b6c2b38d821a0e2b54eef6b12`。远端文件目录未初始化 Git，本次直接部署经过验证的最小补丁；本地分支未合并/推送。真实轨迹效果仍待用户实测。
