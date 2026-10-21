@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>reBot Camera Gravity Console</title>
+    <title>reBot Joint Gravity Tuner</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -11,7 +11,7 @@
       <section class="topbar">
         <div>
           <p class="eyebrow">reBotArm-Camera</p>
-          <h1>Gravity Console</h1>
+          <h1>Teach & Replay Console</h1>
         </div>
         <div class="status-strip">
           <span id="modeBadge" class="badge">idle</span>
@@ -20,89 +20,85 @@
         </div>
       </section>
 
-      <section class="grid">
-        <div class="panel controls">
+      <section class="workspace">
+        <section class="panel status-panel">
           <div id="modeCard" class="mode-card dry">
             <span id="modeTitle">DRY-RUN</span>
             <strong id="modeText">simulation console</strong>
           </div>
-
-          <div class="panel-head">
-            <h2>Compensation</h2>
-            <output id="percentReadout">20%</output>
+          <div class="readout">
+            <span>Current pose</span>
+            <strong id="poseSummary">--</strong>
           </div>
-
-          <label class="slider-row">
-            <span>Total</span>
-            <input id="basePercent" type="range" min="0" max="60" value="20" step="1" />
-          </label>
-          <p class="hint">Total scales model + camera-payload gravity torque; pose changes are recalculated continuously.</p>
-
-          <div class="quick-buttons" id="quickButtons">
-            <button data-percent="20">20</button>
-            <button data-percent="25">25</button>
-            <button data-percent="30">30</button>
-            <button data-percent="35">35</button>
-            <button data-percent="40">40</button>
-            <button data-percent="45">45</button>
-            <button data-percent="50">50</button>
-            <button data-percent="60">60</button>
+          <div class="readout">
+            <span>Log</span>
+            <strong id="logPath">no log</strong>
           </div>
-
-          <div class="trim-grid">
-            <label>
-              <span>J2 trim</span>
-              <input id="trimJ2" type="range" min="-20" max="20" value="0" step="1" />
-              <output id="trimJ2Out">0%</output>
-            </label>
-            <label>
-              <span>J3 trim</span>
-              <input id="trimJ3" type="range" min="-20" max="20" value="0" step="1" />
-              <output id="trimJ3Out">0%</output>
-            </label>
-            <label>
-              <span>J4 trim</span>
-              <input id="trimJ4" type="range" min="-20" max="20" value="0" step="1" />
-              <output id="trimJ4Out">0%</output>
-            </label>
-          </div>
-
+          <p id="message" class="message">ready</p>
           <div class="actions">
-            <button id="startBtn" class="primary">Start dry-run</button>
-            <button id="applyBtn">Apply</button>
-            <button id="stopBtn">Stop hold</button>
+            <button id="startBtn" class="primary">Start tuning</button>
+            <button id="applyBtn">Apply sliders</button>
+            <button id="stopBtn">Stop loose hold</button>
             <button id="homeBtn">Home disable</button>
             <button id="estopBtn" class="danger">Emergency disable</button>
           </div>
-        </div>
+        </section>
 
-        <div class="panel telemetry">
+        <section class="panel tuner-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Per-Joint Compensation</h2>
+              <p>URDF model only. Sliders scale each joint's current gravity estimate.</p>
+            </div>
+            <button id="reset80Btn">All 80%</button>
+          </div>
+          <div id="jointControls" class="joint-controls"></div>
+        </section>
+
+        <section class="panel trajectories-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Teach Trajectories</h2>
+              <p>Record Home to target and back Home. Each slot can replay its full path.</p>
+            </div>
+          </div>
+          <div class="camera-profile">
+            <div class="camera-switch" role="group" aria-label="Camera profile">
+              <button id="lightCameraBtn" data-camera-profile="light" class="active">Light Camera</button>
+              <button id="heavyCameraBtn" data-camera-profile="heavy">Heavy Camera</button>
+            </div>
+            <p id="cameraProfileText">Light Camera selected</p>
+          </div>
+          <div id="trajectoryCards" class="trajectory-cards"></div>
+          <button id="addTrajectoryBtn" class="add-track">Add trajectory</button>
+        </section>
+
+        <section class="panel telemetry">
           <div class="panel-head">
             <h2>Telemetry</h2>
-            <span id="message">ready</span>
+            <span>Nm values update from the live loop</span>
           </div>
           <table>
             <thead>
               <tr>
                 <th>Joint</th>
                 <th>deg</th>
+                <th>scale</th>
                 <th>model Nm</th>
-                <th>payload Nm</th>
-                <th>total Nm</th>
                 <th>cmd Nm</th>
               </tr>
             </thead>
             <tbody id="telemetryBody"></tbody>
           </table>
-        </div>
+        </section>
 
-        <div class="panel log-panel">
+        <section class="panel log-panel">
           <div class="panel-head">
             <h2>Run Log</h2>
-            <span id="logPath">no log</span>
+            <span>latest events</span>
           </div>
           <div id="events" class="events"></div>
-        </div>
+        </section>
       </section>
     </main>
     <script src="/app.js"></script>

@@ -1,14 +1,15 @@
 :root {
-  --bg: #10120f;
-  --panel: #181c17;
-  --panel-2: #20261e;
-  --line: #3c4638;
-  --text: #eef4e8;
-  --muted: #9faa99;
-  --accent: #d7ff66;
+  --bg: #0f1114;
+  --panel: #171b20;
+  --panel-2: #20262d;
+  --line: #39424c;
+  --text: #f2f6f8;
+  --muted: #9ca8b4;
+  --accent: #8fe36b;
+  --accent-2: #72d8ff;
   --warn: #ffbf47;
-  --danger: #ff5a4f;
-  --ok: #7dffa2;
+  --danger: #ff6257;
+  --ok: #8fe36b;
 }
 
 * {
@@ -19,10 +20,11 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    radial-gradient(circle at 88% 12%, rgba(114, 216, 255, 0.10), transparent 28%),
     var(--bg);
-  background-size: 28px 28px;
+  background-size: 28px 28px, 28px 28px, auto, auto;
   color: var(--text);
   font-family: "Avenir Next", "Helvetica Neue", sans-serif;
   letter-spacing: 0;
@@ -34,9 +36,9 @@ input {
 }
 
 .shell {
-  width: min(1280px, calc(100vw - 32px));
+  width: min(1500px, calc(100vw - 28px));
   margin: 0 auto;
-  padding: 24px 0;
+  padding: 20px 0;
 }
 
 .topbar {
@@ -44,7 +46,7 @@ input {
   align-items: end;
   justify-content: space-between;
   gap: 20px;
-  padding: 18px 0 22px;
+  padding: 12px 0 18px;
 }
 
 .eyebrow {
@@ -52,21 +54,23 @@ input {
   color: var(--accent);
   text-transform: uppercase;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 h1,
-h2 {
+h2,
+p {
   margin: 0;
-  line-height: 1;
 }
 
 h1 {
-  font-size: 42px;
+  font-size: 38px;
+  line-height: 1;
 }
 
 h2 {
   font-size: 18px;
+  line-height: 1.1;
 }
 
 .status-strip {
@@ -76,34 +80,37 @@ h2 {
   flex-wrap: wrap;
   justify-content: flex-end;
   color: var(--muted);
+  font-size: 13px;
 }
 
 .badge {
-  min-width: 84px;
+  min-width: 92px;
   text-align: center;
   padding: 7px 10px;
   border: 1px solid var(--line);
-  background: #11150f;
+  background: #101419;
   color: var(--ok);
   text-transform: uppercase;
-  font-weight: 800;
+  font-weight: 900;
   font-size: 12px;
 }
 
-.grid {
+.workspace {
   display: grid;
-  grid-template-columns: 410px 1fr;
-  gap: 16px;
+  grid-template-columns: 300px minmax(480px, 1fr) 380px;
+  gap: 14px;
+  align-items: start;
 }
 
 .panel {
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--panel), #141812);
+  background: linear-gradient(180deg, var(--panel), #12161a);
   box-shadow: 0 16px 50px rgba(0, 0, 0, 0.28);
   border-radius: 8px;
-  padding: 18px;
+  padding: 16px;
 }
 
+.telemetry,
 .log-panel {
   grid-column: 1 / -1;
 }
@@ -113,23 +120,25 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 18px;
-  color: var(--muted);
+  margin-bottom: 14px;
 }
 
-.panel-head h2 {
-  color: var(--text);
+.panel-head p,
+.panel-head span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 5px;
 }
 
 .mode-card {
   display: grid;
-  grid-template-columns: 92px 1fr;
+  grid-template-columns: 72px 1fr;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 11px;
   border: 1px solid var(--line);
-  background: #10150e;
+  background: #101419;
   border-radius: 6px;
 }
 
@@ -154,47 +163,35 @@ h2 {
   color: #ffd5d1;
 }
 
-#percentReadout {
-  color: var(--accent);
-  font-size: 32px;
-  font-weight: 900;
-}
-
-.slider-row,
-.trim-grid label {
+.readout {
   display: grid;
-  grid-template-columns: 76px 1fr 44px;
-  align-items: center;
-  gap: 12px;
-  color: var(--muted);
+  gap: 5px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.slider-row {
-  grid-template-columns: 76px 1fr;
-  margin-bottom: 8px;
-}
-
-input[type="range"] {
-  width: 100%;
-  accent-color: var(--accent);
-}
-
-.hint {
-  margin: 0 0 16px 76px;
+.readout span {
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.35;
 }
 
-.quick-buttons {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  margin-bottom: 18px;
+.readout strong {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.message {
+  min-height: 38px;
+  margin: 12px 0;
+  color: var(--accent-2);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 button {
-  min-height: 38px;
+  min-height: 36px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel-2);
@@ -202,13 +199,18 @@ button {
   cursor: pointer;
 }
 
-button:hover {
+button:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .primary {
   background: var(--accent);
-  color: #161b10;
+  color: #11170f;
   font-weight: 900;
 }
 
@@ -223,20 +225,139 @@ button:hover {
   color: #ffd5d1;
 }
 
-.trim-grid {
-  display: grid;
-  gap: 14px;
-  margin-bottom: 18px;
-}
-
 .actions {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: 1fr;
+  gap: 9px;
+}
+
+.joint-controls {
+  display: grid;
   gap: 10px;
 }
 
-.actions .danger {
-  grid-column: 1 / -1;
+.joint-row {
+  display: grid;
+  grid-template-columns: 44px 40px 40px minmax(170px, 1fr) 40px 40px 54px;
+  gap: 8px;
+  align-items: center;
+  min-height: 48px;
+  padding: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.joint-name {
+  color: var(--accent-2);
+  font-weight: 900;
+}
+
+.joint-row output {
+  text-align: right;
+  color: var(--accent);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.step {
+  min-height: 30px;
+  padding: 0;
+  font-size: 12px;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.trajectory-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.camera-profile {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(114, 216, 255, 0.035);
+}
+
+.camera-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.camera-switch button {
+  min-height: 34px;
+  font-weight: 800;
+}
+
+.camera-switch button.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #11170f;
+}
+
+.camera-profile p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.trajectory-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 12px;
+}
+
+.trajectory-card.recording {
+  border-color: var(--warn);
+  background: rgba(255, 191, 71, 0.08);
+}
+
+.trajectory-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.trajectory-card header span,
+.trajectory-card p,
+.trajectory-card small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.trajectory-card p {
+  min-height: 34px;
+  margin-bottom: 7px;
+}
+
+.trajectory-card small {
+  display: block;
+  min-height: 34px;
+}
+
+.trajectory-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.add-track {
+  width: 100%;
+  margin-top: 10px;
+  border-style: dashed;
+  color: var(--accent-2);
 }
 
 table {
@@ -248,7 +369,7 @@ table {
 th,
 td {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 10px 8px;
+  padding: 9px 8px;
   text-align: right;
 }
 
@@ -265,10 +386,10 @@ th {
 }
 
 .events {
-  height: 210px;
+  height: 220px;
   overflow: auto;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  background: #0d100c;
+  background: #0c0f12;
   padding: 10px;
   font-family: "SF Mono", Menlo, monospace;
   font-size: 12px;
@@ -291,22 +412,22 @@ th {
   color: var(--danger);
 }
 
-@media (max-width: 900px) {
-  .grid,
+@media (max-width: 1100px) {
+  .workspace,
   .topbar {
     display: block;
   }
 
   .panel {
-    margin-bottom: 16px;
-  }
-
-  .hint {
-    margin-left: 0;
+    margin-bottom: 14px;
   }
 
   h1 {
-    font-size: 34px;
-    margin-bottom: 14px;
+    font-size: 32px;
+    margin-bottom: 12px;
+  }
+
+  .joint-row {
+    grid-template-columns: 40px 36px 36px minmax(120px, 1fr) 36px 36px 52px;
   }
 }

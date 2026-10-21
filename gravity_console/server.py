@@ -25,9 +25,33 @@ APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 DEFAULT_ROBOT_ROOT = Path("/home/com/reBotArm_control_py")
 BASE_JOINT_SCALE = np.array([1.0, 0.98, 0.98, 1.0, 1.0, 1.0], dtype=float)
-PAYLOAD_KG = 0.8
-PAYLOAD_OFFSET_LOCAL_M = np.array([0.06, 0.0, 0.0], dtype=float)
-MAX_PERCENT_DEFAULT = 60.0
+JOINT_NAMES = [f"J{i}" for i in range(1, 7)]
+DEFAULT_JOINT_PERCENT = np.array([80.0, 80.0, 80.0, 80.0, 80.0, 80.0], dtype=float)
+COMMAND_CLAMP_NM = np.array([1.0, 9.0, 12.0, 5.0, 0.8, 0.8], dtype=float)
+LOOSE_KP = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=float)
+LOOSE_KD = np.array([0.35, 0.35, 0.35, 0.35, 0.25, 0.25], dtype=float)
+REPLAY_KP = np.array([8.0, 30.0, 35.0, 22.0, 5.0, 5.0], dtype=float)
+REPLAY_KD = np.array([0.8, 2.0, 2.4, 1.8, 0.4, 0.4], dtype=float)
+SOFT_MIN_DEG = np.array([-55.0, -8.0, -1.5, -70.0, -35.0, -10.0], dtype=float)
+SOFT_MAX_DEG = np.array([55.0, 85.0, 80.0, 70.0, 35.0, 90.0], dtype=float)
+RECORD_EVERY_N = 2
+DEFAULT_CAMERA_PROFILE = "light"
+CAMERA_PROFILES = {
+    "light": {
+        "label": "Light Camera",
+        "payload_kg": 0.0,
+        "payload_offset_local_m": [0.06, 0.0, 0.0],
+        "note": "Original URDF/gripper-equivalent compensation",
+    },
+    "heavy": {
+        "label": "Heavy Camera",
+        "payload_kg": 0.4,
+        "payload_offset_local_m": [0.075, 0.0, -0.025],
+        "note": "1200g camera: adds about 400g beyond the light/URDF baseline",
+    },
+}
+MAX_PERCENT_DEFAULT = 200.0
+MAX_TRAJECTORY_SLOTS = 20
 
 
 def now_ms() -> int:
@@ -102,10 +126,8 @@ joints:
 
 @dataclass
 class Settings:
-    base_percent: float = 20.0
-    trims: dict[str, float] = field(
-        default_factory=lambda: {"j2": 0.0, "j3": 0.0, "j4": 0.0}
-    )
+    joint_percent: list[float] = field(default_factory=lambda: DEFAULT_JOINT_PERCENT.tolist())
+    camera_profile: str = DEFAULT_CAMERA_PROFILE
 
 
 @dataclass
@@ -116,17 +138,20 @@ class RobotStatus:
     connected: bool = False
     enabled: bool = False
     dry_run: bool = False
-    base_percent: float = 20.0
-    target_percent: float = 20.0
-    trims: dict[str, float] = field(
-        default_factory=lambda: {"j2": 0.0, "j3": 0.0, "j4": 0.0}
-    )
-    effective_scale: list[float] = field(default_factory=lambda: [0.2] * 6)
+    base_percent: float = 80.0
+    target_percent: float = 80.0
+    joint_percent: list[float] = field(default_factory=lambda: DEFAULT_JOINT_PERCENT.tolist())
+    camera_profile: str = DEFAULT_CAMERA_PROFILE
+    effective_scale: list[float] = field(default_factory=lambda: (DEFAULT_JOINT_PERCENT / 100.0).tolist())
     q_deg: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_model_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_payload_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_total_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_cmd_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
+    presets: list[dict[str, Any]] = field(default_factory=list)
+    trajectories: list[dict[str, Any]] = field(default_factory=list)
+    recording_slot: int | None = None
+    recording_samples: int = 0
     message: str = "ready"
     updated_ms: int = field(default_factory=now_ms)
 
@@ -140,13 +165,19 @@ class RobotStatus:
             "dry_run": self.dry_run,
             "base_percent": self.base_percent,
             "target_percent": self.target_percent,
-            "trims": self.trims,
+            "joint_percent": self.joint_percent,
+            "camera_profile": self.camera_profile,
+            "camera_profiles": CAMERA_PROFILES,
             "effective_scale": self.effective_scale,
             "q_deg": self.q_deg,
             "tau_model_nm": self.tau_model_nm,
             "tau_payload_nm": self.tau_payload_nm,
             "tau_total_nm": self.tau_total_nm,
             "tau_cmd_nm": self.tau_cmd_nm,
+            "presets": self.presets,
+            "trajectories": self.trajectories,
+            "recording_slot": self.recording_slot,
+            "recording_samples": self.recording_samples,
             "message": self.message,
             "updated_ms": self.updated_ms,
         }
@@ -160,13 +191,19 @@ class GravityConsole:
         log_dir: Path,
         dry_run: bool,
         max_percent: float,
+        preset_file: Path | None,
+        trajectory_file: Path | None,
     ) -> None:
         self.robot_root = robot_root
         self.log_dir = log_dir
+        self.preset_file = preset_file or (log_dir / "gravity_presets.json")
+        self.trajectory_file = trajectory_file or (log_dir / "teach_trajectories.json")
         self.dry_run = dry_run
         self.max_percent = max_percent
         self.status = RobotStatus(dry_run=dry_run)
         self.settings = Settings()
+        self.recording: dict[str, Any] | None = None
+        self._trajectories: list[dict[str, Any]] = []
         self.lock = threading.RLock()
         self.events: list[dict[str, Any]] = []
         self.subscribers: list[queue.Queue[dict[str, Any]]] = []
@@ -180,6 +217,8 @@ class GravityConsole:
         self._temp_cfg = self._temp_dir / "rebotarm_camera_j1j6.yaml"
         make_j1j6_config(self._temp_cfg)
         self._log_file = None
+        self._load_presets()
+        self._load_trajectories()
 
     def close(self) -> None:
         self.stop_requested.set()
@@ -237,7 +276,10 @@ class GravityConsole:
         with self.lock:
             self.events.append(event)
             self.events = self.events[-200:]
-        print(json.dumps({"event": event}, ensure_ascii=False), flush=True)
+        try:
+            print(json.dumps({"event": event}, ensure_ascii=False), flush=True)
+        except (BrokenPipeError, OSError):
+            pass
         self._publish({"type": "event", "event": event})
         self._write_log({"kind": "event", **event})
 
@@ -255,29 +297,100 @@ class GravityConsole:
         self._log_file.write(json.dumps({"t_wall": time.time(), **record}, ensure_ascii=False) + "\n")
         self._log_file.flush()
 
+    def _load_presets(self) -> None:
+        try:
+            if self.preset_file.exists():
+                raw = json.loads(self.preset_file.read_text(encoding="utf-8"))
+                presets = raw.get("presets", raw if isinstance(raw, list) else [])
+                if isinstance(presets, list):
+                    self.status.presets = presets
+        except Exception as exc:
+            self._event("warn", f"preset load failed: {exc!r}")
+
+    def _save_presets_file(self) -> None:
+        self.preset_file.parent.mkdir(parents=True, exist_ok=True)
+        self.preset_file.write_text(
+            json.dumps({"updated_ms": now_ms(), "presets": self.status.presets}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def _load_trajectories(self) -> None:
+        try:
+            if self.trajectory_file.exists():
+                raw = json.loads(self.trajectory_file.read_text(encoding="utf-8"))
+                trajectories = raw.get("trajectories", raw if isinstance(raw, list) else [])
+                if isinstance(trajectories, list):
+                    self._trajectories = trajectories
+                    self.status.trajectories = self._trajectory_summaries()
+        except Exception as exc:
+            self._event("warn", f"trajectory load failed: {exc!r}")
+
+    def _save_trajectories_file(self) -> None:
+        self.trajectory_file.parent.mkdir(parents=True, exist_ok=True)
+        self.trajectory_file.write_text(
+            json.dumps(
+                {"updated_ms": now_ms(), "trajectories": self._trajectories},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def _trajectory_summaries(self) -> list[dict[str, Any]]:
+        summaries: list[dict[str, Any]] = []
+        for traj in self._trajectories:
+            samples = traj.get("samples") if isinstance(traj, dict) else None
+            summaries.append(
+                {
+                    "slot": traj.get("slot"),
+                    "label": traj.get("label"),
+                    "saved_ms": traj.get("saved_ms"),
+                    "duration_s": traj.get("duration_s"),
+                    "sample_count": len(samples) if isinstance(samples, list) else traj.get("sample_count", 0),
+                    "camera_profile": traj.get("camera_profile", DEFAULT_CAMERA_PROFILE),
+                    "start_q_deg": traj.get("start_q_deg"),
+                    "end_q_deg": traj.get("end_q_deg"),
+                }
+            )
+        summaries.sort(key=lambda item: int(item.get("slot") or 99))
+        return summaries
+
     def _validated_settings(self, data: dict[str, Any]) -> Settings:
-        base = clamp(float(data.get("base_percent", self.settings.base_percent)), 0.0, self.max_percent)
-        raw_trims = data.get("trims", {}) or {}
-        trims = {
-            "j2": clamp(float(raw_trims.get("j2", self.settings.trims["j2"])), -20.0, 20.0),
-            "j3": clamp(float(raw_trims.get("j3", self.settings.trims["j3"])), -20.0, 20.0),
-            "j4": clamp(float(raw_trims.get("j4", self.settings.trims["j4"])), -20.0, 20.0),
-        }
-        return Settings(base_percent=base, trims=trims)
+        raw = data.get("joint_percent", self.settings.joint_percent)
+        if not isinstance(raw, list) or len(raw) != 6:
+            raise ValueError("joint_percent must be a 6-element list")
+        profile = str(data.get("camera_profile", self.settings.camera_profile) or DEFAULT_CAMERA_PROFILE)
+        if profile not in CAMERA_PROFILES:
+            raise ValueError(f"camera_profile must be one of {', '.join(CAMERA_PROFILES)}")
+        return Settings(joint_percent=[clamp(float(x), 0.0, self.max_percent) for x in raw], camera_profile=profile)
 
     def _effective_scale(self, settings: Settings) -> np.ndarray:
-        trims = np.array(
-            [
-                1.0,
-                1.0 + settings.trims["j2"] / 100.0,
-                1.0 + settings.trims["j3"] / 100.0,
-                1.0 + settings.trims["j4"] / 100.0,
-                1.0,
-                1.0,
-            ],
-            dtype=float,
-        )
-        return BASE_JOINT_SCALE * trims * (settings.base_percent / 100.0)
+        return BASE_JOINT_SCALE * (np.array(settings.joint_percent, dtype=float) / 100.0)
+
+    def _camera_profile(self) -> dict[str, Any]:
+        with self.lock:
+            name = self.settings.camera_profile
+        profile = CAMERA_PROFILES.get(name, CAMERA_PROFILES[DEFAULT_CAMERA_PROFILE])
+        return {"name": name, **profile}
+
+    def _assert_soft_limits(self, q: np.ndarray, *, label: str) -> None:
+        q_deg = np.array(deg(q), dtype=float)
+        bad = np.where((q_deg < SOFT_MIN_DEG) | (q_deg > SOFT_MAX_DEG))[0]
+        if len(bad) > 0:
+            names = ", ".join(f"{JOINT_NAMES[i]}={q_deg[i]:.1f}deg" for i in bad)
+            raise RuntimeError(f"{label} outside soft limits: {names}")
+
+    def _assert_trajectory_soft_limits(self, trajectory: dict[str, Any]) -> None:
+        label = str(trajectory.get("label") or f"Pose {trajectory.get('slot', '?')}")
+        for sample in trajectory.get("samples") or []:
+            self._assert_soft_limits(np.array(sample["q_rad"], dtype=float), label=label)
+
+    def _validated_slot(self, data: dict[str, Any]) -> int:
+        slot = int(data.get("slot", 0))
+        if slot < 1 or slot > MAX_TRAJECTORY_SLOTS:
+            raise ValueError(f"slot must be 1-{MAX_TRAJECTORY_SLOTS}")
+        return slot
 
     def start(self, data: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
@@ -293,11 +406,14 @@ class GravityConsole:
                 mode="starting",
                 run_id=run_id,
                 log_path=str(log_path),
-                base_percent=self.settings.base_percent,
-                target_percent=self.settings.base_percent,
-                trims=self.settings.trims,
+                base_percent=float(np.mean(self.settings.joint_percent)),
+                target_percent=float(np.mean(self.settings.joint_percent)),
+                joint_percent=list(self.settings.joint_percent),
+                camera_profile=self.settings.camera_profile,
                 effective_scale=self._effective_scale(self.settings).tolist(),
-                message="starting J1-J6 gravity compensation",
+                presets=self.status.presets,
+                trajectories=self.status.trajectories,
+                message="starting J1-J6 joint gravity tuning",
             )
             self._write_log(
                 {
@@ -305,17 +421,19 @@ class GravityConsole:
                     "run_id": run_id,
                     "dry_run": self.dry_run,
                     "settings": {
-                        "base_percent": self.settings.base_percent,
-                        "trims": self.settings.trims,
+                        "joint_percent": self.settings.joint_percent,
+                        "camera_profile": self.settings.camera_profile,
                     },
                     "max_percent": self.max_percent,
-                    "payload_kg": PAYLOAD_KG,
-                    "payload_offset_local_m": PAYLOAD_OFFSET_LOCAL_M.tolist(),
+                    "camera_profiles": CAMERA_PROFILES,
+                    "command_clamp_nm": COMMAND_CLAMP_NM.tolist(),
+                    "kp": LOOSE_KP.tolist(),
+                    "kd": LOOSE_KD.tolist(),
                 }
             )
             self.thread = threading.Thread(target=self._run_loop, name="gravity-console-loop", daemon=True)
             self.thread.start()
-        self._event("info", f"started {self.settings.base_percent:.0f}%")
+        self._event("info", f"started joint tuning {self.settings.joint_percent}")
         return self.status.to_json()
 
     def apply(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -323,11 +441,233 @@ class GravityConsole:
         with self.lock:
             self.settings = settings
         self._set_status(
-            target_percent=settings.base_percent,
-            trims=settings.trims,
-            message=f"ramping to {settings.base_percent:.0f}%",
+            base_percent=float(np.mean(settings.joint_percent)),
+            target_percent=float(np.mean(settings.joint_percent)),
+            joint_percent=list(settings.joint_percent),
+            camera_profile=settings.camera_profile,
+            message=f"applied {CAMERA_PROFILES[settings.camera_profile]['label']}",
         )
-        self._event("info", f"apply {settings.base_percent:.0f}%", trims=settings.trims)
+        self._event("info", "apply settings", joint_percent=settings.joint_percent, camera_profile=settings.camera_profile)
+        return self.status.to_json()
+
+    def save_preset(self, data: dict[str, Any]) -> dict[str, Any]:
+        slot = int(data.get("slot", 0))
+        if slot < 1 or slot > 3:
+            raise ValueError("slot must be 1, 2, or 3")
+        label = str(data.get("label") or f"Pose {slot}")
+        note = str(data.get("note") or "")
+        with self.lock:
+            status = self.status.to_json()
+            preset = {
+                "slot": slot,
+                "label": label,
+                "note": note,
+                "saved_ms": now_ms(),
+                "camera_profile": status["camera_profile"],
+                "q_deg": status["q_deg"],
+                "joint_percent": status["joint_percent"],
+                "effective_scale": status["effective_scale"],
+                "tau_model_nm": status["tau_model_nm"],
+                "tau_cmd_nm": status["tau_cmd_nm"],
+                "run_id": status["run_id"],
+            }
+            presets = [p for p in self.status.presets if int(p.get("slot", -1)) != slot]
+            presets.append(preset)
+            presets.sort(key=lambda p: int(p.get("slot", 99)))
+            self.status.presets = presets
+            snapshot = self.status.to_json()
+        self._save_presets_file()
+        self._event("info", f"saved {label}", slot=slot, preset_file=str(self.preset_file))
+        self._publish({"type": "status", "status": snapshot})
+        return self.status.to_json()
+
+    def apply_preset(self, data: dict[str, Any]) -> dict[str, Any]:
+        slot = int(data.get("slot", 0))
+        preset = next((p for p in self.status.presets if int(p.get("slot", -1)) == slot), None)
+        if preset is None:
+            raise ValueError(f"Pose {slot} is not saved")
+        self.settings = self._validated_settings(
+            {
+                "joint_percent": preset["joint_percent"],
+                "camera_profile": preset.get("camera_profile", self.settings.camera_profile),
+            }
+        )
+        self._set_status(
+            base_percent=float(np.mean(self.settings.joint_percent)),
+            target_percent=float(np.mean(self.settings.joint_percent)),
+            joint_percent=list(self.settings.joint_percent),
+            camera_profile=self.settings.camera_profile,
+            message=f"applied {preset.get('label', f'Pose {slot}')} compensation",
+        )
+        self._event("info", f"applied {preset.get('label', f'Pose {slot}')}", slot=slot)
+        return self.status.to_json()
+
+    def start_recording(self, data: dict[str, Any]) -> dict[str, Any]:
+        slot = self._validated_slot(data)
+        label = str(data.get("label") or f"Pose {slot}")
+        with self.lock:
+            if self.recording is not None:
+                raise RuntimeError(f"already recording Pose {self.recording.get('slot')}")
+            if self.thread is not None and self.thread.is_alive() and self.status.mode != "running":
+                raise RuntimeError("wait for current motion to finish before recording")
+            self.settings = self._validated_settings(data)
+            if self.thread is None or not self.thread.is_alive():
+                self.stop_requested.clear()
+                run_id = time.strftime("gc_console_%Y%m%d_%H%M%S")
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                log_path = self.log_dir / f"{run_id}.jsonl"
+                self._log_file = log_path.open("w", buffering=1, encoding="utf-8")
+                self._set_status(
+                    mode="starting",
+                    run_id=run_id,
+                    log_path=str(log_path),
+                    base_percent=float(np.mean(self.settings.joint_percent)),
+                    target_percent=float(np.mean(self.settings.joint_percent)),
+                    joint_percent=list(self.settings.joint_percent),
+                    camera_profile=self.settings.camera_profile,
+                    effective_scale=self._effective_scale(self.settings).tolist(),
+                    trajectories=self.status.trajectories,
+                    message=f"starting live tuning for {label}",
+                )
+                self._write_log(
+                    {
+                        "kind": "start_for_recording",
+                        "run_id": run_id,
+                        "slot": slot,
+                        "label": label,
+                        "dry_run": self.dry_run,
+                        "settings": {
+                            "joint_percent": self.settings.joint_percent,
+                            "camera_profile": self.settings.camera_profile,
+                        },
+                    }
+                )
+                self.thread = threading.Thread(target=self._run_loop, name="gravity-console-loop", daemon=True)
+            self.recording = {
+                "slot": slot,
+                "label": label,
+                "started_ms": now_ms(),
+                "run_id": self.status.run_id,
+                "camera_profile": self.settings.camera_profile,
+                "samples": [],
+            }
+            if not self.thread.is_alive():
+                self.thread.start()
+        self._set_status(recording_slot=slot, recording_samples=0, message=f"recording {label}")
+        self._event("info", f"recording started: {label}", slot=slot)
+        return self.status.to_json()
+
+    def stop_recording(self, data: dict[str, Any]) -> dict[str, Any]:
+        slot = int(data.get("slot", 0) or 0)
+        with self.lock:
+            if self.recording is None:
+                raise RuntimeError("not recording")
+            rec = self.recording
+            if slot and int(rec.get("slot", -1)) != slot:
+                raise RuntimeError(f"currently recording Pose {rec.get('slot')}")
+            self.recording = None
+        samples = rec.get("samples") or []
+        if len(samples) < 8:
+            self._set_status(recording_slot=None, recording_samples=0, message="recording discarded; too few samples")
+            raise RuntimeError("recording is too short; keep it running for at least one second")
+        duration_s = float(samples[-1]["t"] - samples[0]["t"])
+        if duration_s <= 0:
+            duration_s = 0.0
+        trajectory = {
+            "slot": int(rec["slot"]),
+            "label": rec["label"],
+            "saved_ms": now_ms(),
+            "run_id": rec.get("run_id"),
+            "camera_profile": rec.get("camera_profile", DEFAULT_CAMERA_PROFILE),
+            "duration_s": duration_s,
+            "sample_count": len(samples),
+            "start_q_deg": samples[0]["q_deg"],
+            "end_q_deg": samples[-1]["q_deg"],
+            "samples": samples,
+        }
+        with self.lock:
+            self._trajectories = [t for t in self._trajectories if int(t.get("slot", -1)) != int(rec["slot"])]
+            self._trajectories.append(trajectory)
+            self._trajectories.sort(key=lambda t: int(t.get("slot", 99)))
+            self.status.trajectories = self._trajectory_summaries()
+            snapshot = self.status.to_json()
+        self._save_trajectories_file()
+        self._set_status(
+            recording_slot=None,
+            recording_samples=0,
+            trajectories=self.status.trajectories,
+            message=f"saved {rec['label']} trajectory",
+        )
+        self._event(
+            "info",
+            f"saved {rec['label']} trajectory",
+            slot=rec["slot"],
+            sample_count=len(samples),
+            duration_s=round(duration_s, 2),
+            trajectory_file=str(self.trajectory_file),
+        )
+        return self.status.to_json()
+
+    def replay_trajectory(self, data: dict[str, Any]) -> dict[str, Any]:
+        slot = self._validated_slot(data)
+        speed = clamp(float(data.get("speed", 0.35)), 0.1, 1.0)
+        with self.lock:
+            if self.recording is not None:
+                raise RuntimeError("stop recording before replay")
+            trajectory = next((t for t in self._trajectories if int(t.get("slot", -1)) == slot), None)
+            if trajectory is None:
+                raise ValueError(f"Pose {slot} trajectory is not saved")
+            samples = trajectory.get("samples") or []
+            if len(samples) < 8:
+                raise ValueError(f"Pose {slot} trajectory has too few samples")
+            self._assert_trajectory_soft_limits(trajectory)
+            self.settings = self._validated_settings(data)
+            if self.thread is not None and self.thread.is_alive():
+                self.stop_requested.set()
+        if self.thread is not None and self.thread.is_alive():
+            self.thread.join(timeout=8.0)
+        with self.lock:
+            if self.thread is not None and self.thread.is_alive():
+                raise RuntimeError("previous control loop did not stop")
+            self.stop_requested.clear()
+            run_id = time.strftime(f"replay_pose{slot}_%Y%m%d_%H%M%S")
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = self.log_dir / f"{run_id}.jsonl"
+            self._log_file = log_path.open("w", buffering=1, encoding="utf-8")
+            self._set_status(
+                mode="replay_starting",
+                run_id=run_id,
+                log_path=str(log_path),
+                camera_profile=self.settings.camera_profile,
+                message=f"starting replay Pose {slot} at {int(speed * 100)}%",
+            )
+            self.thread = threading.Thread(
+                target=self._replay_loop,
+                args=(trajectory, speed),
+                name=f"replay-pose-{slot}",
+                daemon=True,
+            )
+            self.thread.start()
+        self._event("info", f"replay requested: Pose {slot}", slot=slot, speed=speed)
+        return self.status.to_json()
+
+    def reset_trajectory(self, data: dict[str, Any]) -> dict[str, Any]:
+        slot = self._validated_slot(data)
+        with self.lock:
+            if self.recording is not None and int(self.recording.get("slot", -1)) == slot:
+                self.recording = None
+            before = len(self._trajectories)
+            self._trajectories = [t for t in self._trajectories if int(t.get("slot", -1)) != slot]
+            self.status.trajectories = self._trajectory_summaries()
+        self._save_trajectories_file()
+        self._set_status(
+            trajectories=self.status.trajectories,
+            recording_slot=None if self.status.recording_slot == slot else self.status.recording_slot,
+            recording_samples=0 if self.status.recording_slot == slot else self.status.recording_samples,
+            message=f"reset Pose {slot} trajectory",
+        )
+        level = "info" if before != len(self._trajectories) else "warn"
+        self._event(level, f"reset Pose {slot} trajectory", slot=slot, trajectory_file=str(self.trajectory_file))
         return self.status.to_json()
 
     def stop_hold(self) -> dict[str, Any]:
@@ -386,9 +726,12 @@ class GravityConsole:
         self._frame_id = get_end_effector_frame_id(self._model)
 
     def _estimate_payload(self, q6: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        profile = self._camera_profile()
+        payload_kg = float(profile["payload_kg"])
+        payload_offset = np.array(profile["payload_offset_local_m"], dtype=float)
         if self.dry_run:
             model_tau = np.array([0.0, 1.4, 6.7, 2.0, 0.0, 0.0], dtype=float)
-            payload = np.array([0.0, -2.6, 4.5, 2.7, 0.0, 0.0], dtype=float)
+            payload = np.array([0.0, payload_kg * 0.6, payload_kg * 2.5, payload_kg * 0.7, 0.0, 0.0], dtype=float)
             return model_tau, payload
         self._ensure_model()
         from reBotArm_control_py.dynamics.inverse_dynamics import compute_generalized_gravity
@@ -408,13 +751,13 @@ class GravityConsole:
             self._frame_id,
             pin.ReferenceFrame.LOCAL_WORLD_ALIGNED,
         )
-        r_world = data.oMf[self._frame_id].rotation @ PAYLOAD_OFFSET_LOCAL_M
+        r_world = data.oMf[self._frame_id].rotation @ payload_offset
         skew = np.array(
             [[0, -r_world[2], r_world[1]], [r_world[2], 0, -r_world[0]], [-r_world[1], r_world[0], 0]],
             dtype=float,
         )
         j_point = jac[:3, :] - skew @ jac[3:, :]
-        payload = (PAYLOAD_KG * 9.81 * j_point[2, :])[:6]
+        payload = (payload_kg * 9.81 * j_point[2, :])[:6]
         return tau_model, payload
 
     def _read_positions(self, t: float) -> np.ndarray:
@@ -433,13 +776,49 @@ class GravityConsole:
         assert self.robot is not None
         return self.robot.arm.get_positions().copy()
 
-    def _send_mit(self, q: np.ndarray, tau: np.ndarray) -> None:
+    def _send_mit(self, q: np.ndarray, tau: np.ndarray, *, kp: np.ndarray = LOOSE_KP, kd: np.ndarray = LOOSE_KD) -> None:
         if self.dry_run:
             return
         assert self.robot is not None
-        kp = np.array([1.5, 1.5, 1.5, 1.5, 1.5, 1.5], dtype=float)
-        kd = np.array([0.8, 0.8, 0.8, 0.8, 0.8, 0.8], dtype=float)
         self.robot.arm.send_mit(q, vel=np.zeros(6), kp=kp, kd=kd, tau=tau)
+
+    def _record_sample(
+        self,
+        *,
+        t: float,
+        q: np.ndarray,
+        tau_model: np.ndarray,
+        tau_payload: np.ndarray,
+        tau_total: np.ndarray,
+        tau_cmd: np.ndarray,
+        joint_percent: list[float],
+        effective_scale: np.ndarray,
+        camera_profile: str,
+    ) -> None:
+        with self.lock:
+            if self.recording is None:
+                return
+            samples = self.recording["samples"]
+            min_dt = RECORD_EVERY_N / 30.0
+            if len(samples) > 0 and float(t) - float(samples[-1]["t"]) < min_dt:
+                return
+            sample = {
+                "t": round(float(t), 3),
+                "q_rad": [float(x) for x in q],
+                "q_deg": deg(q),
+                "tau_model_nm": [float(x) for x in tau_model],
+                "tau_payload_nm": [float(x) for x in tau_payload],
+                "tau_total_nm": [float(x) for x in tau_total],
+                "tau_cmd_nm": [float(x) for x in tau_cmd],
+                "joint_percent": [float(x) for x in joint_percent],
+                "effective_scale": [float(x) for x in effective_scale],
+                "camera_profile": camera_profile,
+            }
+            samples.append(sample)
+            slot = int(self.recording["slot"])
+            count = len(samples)
+        if count % 8 == 0:
+            self._set_status(recording_slot=slot, recording_samples=count, message=f"recording Pose {slot}: {count} samples")
 
     def _run_loop(self) -> None:
         current_scale = self._effective_scale(self.settings)
@@ -451,7 +830,7 @@ class GravityConsole:
             if not self.dry_run:
                 if self.robot is None:
                     self.robot = self._ensure_robot()
-                self.robot.connect()
+                    self.robot.connect()
                 self.robot.arm.mode_mit()
                 self.robot.arm.enable()
             self._set_status(mode="running", connected=True, enabled=True, message="running")
@@ -462,13 +841,25 @@ class GravityConsole:
                 tau_total = tau_model + tau_payload
                 with self.lock:
                     target_scale = self._effective_scale(self.settings)
-                    base_percent = self.settings.base_percent
-                    trims = dict(self.settings.trims)
+                    joint_percent = list(self.settings.joint_percent)
+                    camera_profile = self.settings.camera_profile
+                    base_percent = float(np.mean(joint_percent))
                 max_step = 0.15 * dt
                 delta = np.clip(target_scale - current_scale, -max_step, max_step)
                 current_scale = current_scale + delta
-                tau_cmd = tau_total * current_scale
+                tau_cmd = np.clip(tau_total * current_scale, -COMMAND_CLAMP_NM, COMMAND_CLAMP_NM)
                 self._send_mit(q, tau_cmd)
+                self._record_sample(
+                    t=loop_t - t0,
+                    q=q,
+                    tau_model=tau_model,
+                    tau_payload=tau_payload,
+                    tau_total=tau_total,
+                    tau_cmd=tau_cmd,
+                    joint_percent=joint_percent,
+                    effective_scale=current_scale,
+                    camera_profile=camera_profile,
+                )
                 self._write_log(
                     {
                         "kind": "sample",
@@ -479,8 +870,8 @@ class GravityConsole:
                         "tau_payload_nm": [float(x) for x in tau_payload],
                         "tau_total_nm": [float(x) for x in tau_total],
                         "tau_cmd_nm": [float(x) for x in tau_cmd],
-                        "base_percent": base_percent,
-                        "trims": trims,
+                        "joint_percent": joint_percent,
+                        "camera_profile": camera_profile,
                         "effective_scale": [float(x) for x in current_scale],
                     }
                 )
@@ -491,14 +882,19 @@ class GravityConsole:
                         enabled=True,
                         base_percent=base_percent,
                         target_percent=base_percent,
-                        trims=trims,
+                        joint_percent=joint_percent,
+                        camera_profile=camera_profile,
                         effective_scale=[float(x) for x in current_scale],
                         q_deg=deg(q),
                         tau_model_nm=[float(x) for x in tau_model],
                         tau_payload_nm=[float(x) for x in tau_payload],
                         tau_total_nm=[float(x) for x in tau_total],
                         tau_cmd_nm=[float(x) for x in tau_cmd],
-                        message=f"running {base_percent:.0f}%",
+                        presets=self.status.presets,
+                        trajectories=self.status.trajectories,
+                        recording_slot=self.status.recording_slot,
+                        recording_samples=self.status.recording_samples,
+                        message="running joint tuning",
                     )
                     last_status = loop_t
                 sleep_for = dt - (time.time() - loop_t)
@@ -507,7 +903,7 @@ class GravityConsole:
             q = self._read_positions(time.time() - t0)
             tau_model, tau_payload = self._estimate_payload(q)
             tau_total = tau_model + tau_payload
-            self._send_mit(q, tau_total * current_scale)
+            self._send_mit(q, np.clip(tau_total * current_scale, -COMMAND_CLAMP_NM, COMMAND_CLAMP_NM))
             self._write_log({"kind": "stop_hold", "q_deg": deg(q)})
             self._set_status(mode="holding", enabled=True, q_deg=deg(q), message="stopped and holding current pose")
         except Exception as exc:
@@ -515,6 +911,121 @@ class GravityConsole:
             self._write_log({"kind": "error", "error": repr(exc), "traceback": tb})
             self._event("danger", f"control error: {exc!r}")
             self._set_status(mode="error", message=repr(exc))
+        finally:
+            if self._log_file is not None:
+                self._log_file.flush()
+
+    def _replay_loop(self, trajectory: dict[str, Any], speed: float) -> None:
+        samples = trajectory.get("samples") or []
+        slot = int(trajectory.get("slot", 0))
+        label = str(trajectory.get("label") or f"Pose {slot}")
+        t0 = time.time()
+        final_target: np.ndarray | None = None
+        try:
+            self._assert_trajectory_soft_limits(trajectory)
+            if not self.dry_run and self.robot is None:
+                self.robot = self._ensure_robot()
+                self.robot.connect()
+            if not self.dry_run and self.robot is not None:
+                self.robot.arm.mode_mit()
+                self.robot.arm.enable()
+            self._set_status(mode="replaying", connected=True, enabled=True, message=f"replaying {label}")
+            self._write_log(
+                {
+                    "kind": "replay_start",
+                    "slot": slot,
+                    "label": label,
+                    "speed": speed,
+                    "sample_count": len(samples),
+                    "source_run_id": trajectory.get("run_id"),
+                    "camera_profile": self.settings.camera_profile,
+                    "kp": REPLAY_KP.tolist(),
+                    "kd": REPLAY_KD.tolist(),
+                }
+            )
+            first_t = float(samples[0]["t"])
+            last_status = 0.0
+            for i, sample in enumerate(samples):
+                if self.stop_requested.is_set():
+                    break
+                target_elapsed = max(0.0, (float(sample["t"]) - first_t) / speed)
+                while time.time() - t0 < target_elapsed:
+                    if self.stop_requested.is_set():
+                        break
+                    time.sleep(max(0.001, min(0.01, target_elapsed - (time.time() - t0))))
+                if self.stop_requested.is_set():
+                    break
+                q_target = np.array(sample["q_rad"], dtype=float)
+                final_target = q_target
+                scale_raw = sample.get("effective_scale")
+                if isinstance(scale_raw, list) and len(scale_raw) == 6:
+                    scale = np.array(scale_raw, dtype=float)
+                else:
+                    scale = self._effective_scale(self.settings)
+                tau_model, tau_payload = self._estimate_payload(q_target)
+                tau_total = tau_model + tau_payload
+                tau_cmd = np.clip(tau_total * scale, -COMMAND_CLAMP_NM, COMMAND_CLAMP_NM)
+                self._send_mit(q_target, tau_cmd, kp=REPLAY_KP, kd=REPLAY_KD)
+                q_actual = self._read_positions(time.time() - t0)
+                if not self.dry_run and time.time() - t0 > 1.0:
+                    err_deg = np.max(np.abs(np.array(deg(q_target)) - np.array(deg(q_actual))))
+                    if err_deg > 20.0:
+                        raise RuntimeError(f"tracking error too large during replay: {err_deg:.1f}deg")
+                self._write_log(
+                    {
+                        "kind": "replay_sample",
+                        "i": i,
+                        "source_t": sample.get("t"),
+                        "q_target_deg": deg(q_target),
+                        "q_actual_deg": deg(q_actual),
+                        "tau_cmd_nm": [float(x) for x in tau_cmd],
+                        "effective_scale": [float(x) for x in scale],
+                        "camera_profile": self.settings.camera_profile,
+                    }
+                )
+                loop_t = time.time()
+                if loop_t - last_status > 0.2:
+                    self._set_status(
+                        mode="replaying",
+                        connected=True,
+                        enabled=True,
+                        q_deg=deg(q_actual),
+                        joint_percent=[float(x) for x in sample.get("joint_percent", self.settings.joint_percent)],
+                        camera_profile=self.settings.camera_profile,
+                        effective_scale=[float(x) for x in scale],
+                        tau_model_nm=[float(x) for x in tau_model],
+                        tau_payload_nm=[float(x) for x in tau_payload],
+                        tau_total_nm=[float(x) for x in tau_total],
+                        tau_cmd_nm=[float(x) for x in tau_cmd],
+                        trajectories=self.status.trajectories,
+                        message=f"replaying {label} {i + 1}/{len(samples)}",
+                    )
+                    last_status = loop_t
+            q_hold = self._read_positions(time.time() - t0)
+            if final_target is not None and not self.stop_requested.is_set():
+                q_hold = final_target
+            tau_model, tau_payload = self._estimate_payload(q_hold)
+            tau_total = tau_model + tau_payload
+            tau_cmd = np.clip(tau_total * self._effective_scale(self.settings), -COMMAND_CLAMP_NM, COMMAND_CLAMP_NM)
+            self._send_mit(q_hold, tau_cmd, kp=REPLAY_KP, kd=REPLAY_KD)
+            self._write_log({"kind": "replay_hold", "q_hold_deg": deg(q_hold), "stopped": self.stop_requested.is_set()})
+            self._set_status(
+                mode="holding",
+                connected=True,
+                enabled=True,
+                q_deg=deg(q_hold),
+                tau_model_nm=[float(x) for x in tau_model],
+                tau_payload_nm=[float(x) for x in tau_payload],
+                tau_total_nm=[float(x) for x in tau_total],
+                tau_cmd_nm=[float(x) for x in tau_cmd],
+                message=f"{label} replay complete; holding",
+            )
+            self._event("info", f"{label} replay complete; holding", slot=slot)
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self._write_log({"kind": "replay_error", "error": repr(exc), "traceback": tb})
+            self._set_status(mode="error", message=repr(exc))
+            self._event("danger", f"replay error: {exc!r}", slot=slot)
         finally:
             if self._log_file is not None:
                 self._log_file.flush()
@@ -640,6 +1151,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(self.app.start(data))
             elif parsed.path == "/api/apply":
                 self._send_json(self.app.apply(data))
+            elif parsed.path == "/api/save-preset":
+                self._send_json(self.app.save_preset(data))
+            elif parsed.path == "/api/apply-preset":
+                self._send_json(self.app.apply_preset(data))
+            elif parsed.path == "/api/start-recording":
+                self._send_json(self.app.start_recording(data))
+            elif parsed.path == "/api/stop-recording":
+                self._send_json(self.app.stop_recording(data))
+            elif parsed.path == "/api/replay-trajectory":
+                self._send_json(self.app.replay_trajectory(data))
+            elif parsed.path == "/api/reset-trajectory":
+                self._send_json(self.app.reset_trajectory(data))
             elif parsed.path == "/api/stop":
                 self._send_json(self.app.stop_hold())
             elif parsed.path == "/api/home-disable":
@@ -658,6 +1181,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8012)
     parser.add_argument("--robot-root", type=Path, default=DEFAULT_ROBOT_ROOT)
     parser.add_argument("--log-dir", type=Path, default=Path("logs/runs"))
+    parser.add_argument("--preset-file", type=Path, default=None)
+    parser.add_argument("--trajectory-file", type=Path, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-percent", type=float, default=MAX_PERCENT_DEFAULT)
     args = parser.parse_args()
@@ -667,6 +1192,8 @@ def main() -> int:
         log_dir=args.log_dir,
         dry_run=args.dry_run,
         max_percent=args.max_percent,
+        preset_file=args.preset_file,
+        trajectory_file=args.trajectory_file,
     )
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.app = app  # type: ignore[attr-defined]
