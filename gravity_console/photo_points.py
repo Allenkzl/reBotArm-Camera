@@ -1,4 +1,4 @@
-"""Recording markers and feedback-gated photography; never fire while recording."""
+"""Recording markers and timeline-triggered photography; never fire while recording."""
 from __future__ import annotations
 
 import copy
@@ -7,7 +7,6 @@ import math
 import threading
 import time
 import uuid
-from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +21,6 @@ else:
 
 
 class PhotoPointsControl:
-    photo_tolerance_deg = 2.0
-    photo_stable_window_s = .5
-    photo_stable_span_deg = .3
-    photo_settle_timeout_s = 10.0
     photo_result_timeout_s = 12.0
 
     @staticmethod
@@ -178,32 +173,9 @@ class PhotoPointsControl:
     def _photo_hold_sample(self, target: np.ndarray, scale: np.ndarray) -> np.ndarray:
         self._photo_check_cancel()
         self._position_command(target, scale)
-        actual = self._tracking_check(target)
-        if np.max(np.abs(np.rad2deg(actual-target))) > self.photo_tolerance_deg:
-            raise RuntimeError("拍照位置保持偏差过大，未继续后续动作")
-        return actual
-
-    def _wait_photo_stable(self, target: np.ndarray, scale: np.ndarray) -> None:
-        end = time.monotonic() + self.photo_settle_timeout_s
-        history = deque()
-        while time.monotonic() < end:
-            self._photo_check_cancel()
-            self._position_command(target, scale)
-            actual = self._tracking_check(target)
-            now = time.monotonic()
-            if np.max(np.abs(np.rad2deg(actual-target))) > self.photo_tolerance_deg:
-                history.clear()
-            else:
-                history.append((now, actual.copy()))
-                while len(history) > 2 and history[1][0] <= now-self.photo_stable_window_s:
-                    history.popleft()
-                if history and now-history[0][0] >= self.photo_stable_window_s:
-                    spread = np.ptp(np.array([q for _,q in history]), axis=0)
-                    if np.max(np.rad2deg(spread)) <= self.photo_stable_span_deg:
-                        return
-            self.stop_requested.wait(1/30)
-        self._check_cancel()
-        raise RuntimeError("拍照点到位/停稳超时，未触发快门；请检查跟踪偏差")
+        # Keep the normal motion tracking/feedback checks; photography adds no
+        # tighter position or stability gate in this flow-validation mode.
+        return self._tracking_check(target)
 
     def _photo_check_cancel(self) -> None:
         self._check_cancel()
@@ -214,11 +186,11 @@ class PhotoPointsControl:
                              index: int, scale: np.ndarray) -> None:
         target = np.array(point["q_rad"], dtype=float)
         info = {"point_id": point["id"], "index": index,
-                "total": len(trajectory["photo_points"]), "phase": "settling", "message": "等待到位并停稳"}
+                "total": len(trajectory["photo_points"]), "phase": "triggering", "message": "已执行到拍照点，发送单次快门"}
         operation = None
         try:
-            self._set_status(photo_capture=info, message="拍照点等待停稳")
-            self._wait_photo_stable(target, scale)
+            self._set_status(photo_capture=info, message="已执行到拍照点")
+            self._photo_hold_sample(target, scale)
             self._photo_check_cancel()
             # Each run has its own never-reused cancellation event and identity.
             key = f"{self._photo_run_nonce}:{trajectory['slot']}:{point['id']}"

@@ -35,8 +35,6 @@ class PhotoPointsTests(unittest.TestCase):
         self.app = GravityConsole(robot_root=root, log_dir=root, dry_run=True,
                                   max_percent=200, preset_file=None, trajectory_file=None)
         self.app._set_status(mode="running", enabled=True)
-        self.app.photo_stable_window_s = .035
-        self.app.photo_settle_timeout_s = .15
         self.app.photo_result_timeout_s = .2
         self.app._photo_run_post_delay_s = 0
         self.app._photo_run_nonce = "test-run"
@@ -198,26 +196,36 @@ class PhotoPointsTests(unittest.TestCase):
             self.assertEqual(len(set(keys)), 2)
             self.assertTrue(all(k.startswith("test-run:1:") for k in keys))
 
-    def test_jitter_and_offtarget_timeout_never_trigger(self):
+    def test_jitter_and_three_degree_offset_still_trigger_once_and_hold(self):
+        self.connected()
         tr = trajectory()
         tr["photo_points"] = [point(tr)]
-        for mode in ("jitter", "offtarget"):
-            counter = [0]
-            def feedback(target):
-                counter[0] += 1
-                q = target.copy()
-                q[0] += np.deg2rad(3 if mode == "offtarget" else (.25 if counter[0] % 2 else -.25))
-                return q
-            with self.subTest(mode=mode), patch.object(self.app, "_tracking_check", side_effect=feedback), \
-                 patch.object(self.app.camera, "start_shutter") as shutter:
-                with self.assertRaisesRegex(RuntimeError, "超时"):
-                    self.app._perform_photo_point(tr, tr["photo_points"][0], 1, np.array([.8]*6))
-                shutter.assert_not_called()
+        self.app._photo_run_post_delay_s = .07
+        original = self.app.camera.start_shutter
+        counter = [0]
+        def feedback(target):
+            counter[0] += 1
+            return target + np.deg2rad(3 + (.25 if counter[0] % 2 else -.25))
+        with patch.object(self.app, "_tracking_check", side_effect=feedback), \
+             patch.object(self.app.camera, "start_shutter", wraps=original) as shutter:
+            self.app._perform_photo_point(tr, tr["photo_points"][0], 1, np.array([.8]*6))
+            self.assertEqual(shutter.call_count, 1)
+            self.assertGreaterEqual(counter[0], 3)
+            self.assertEqual(self.app.status.photo_capture["phase"], "complete")
+
+    def test_motion_tracking_failure_before_shutter_still_blocks(self):
+        tr = trajectory()
+        tr["photo_points"] = [point(tr)]
+        with patch.object(self.app, "_tracking_check", side_effect=RuntimeError("normal tracking abort")), \
+             patch.object(self.app.camera, "start_shutter") as shutter:
+            with self.assertRaisesRegex(RuntimeError, "normal tracking abort"):
+                self.app._perform_photo_point(tr, tr["photo_points"][0], 1, np.array([.8]*6))
+            shutter.assert_not_called()
 
     def test_cancel_before_handoff_never_calls_camera(self):
         tr = trajectory()
         tr["photo_points"] = [point(tr)]
-        with patch.object(self.app, "_wait_photo_stable", side_effect=lambda *args: self.app.stop_requested.set()), \
+        with patch.object(self.app, "_photo_hold_sample", side_effect=lambda *args: self.app.stop_requested.set()), \
              patch.object(self.app.camera, "start_shutter") as shutter:
             with self.assertRaises(MotionCancelled):
                 self.app._perform_photo_point(tr, tr["photo_points"][0], 1, np.array([.8]*6))
@@ -227,7 +235,7 @@ class PhotoPointsTests(unittest.TestCase):
         tr = trajectory(step=.001)
         tr["photo_points"] = [point(tr, 0), point(tr, 5)]
         operation = Operation("shutter", "fake")
-        with patch.object(self.app, "_wait_photo_stable"), patch.object(self.app, "_transition"), \
+        with patch.object(self.app, "_transition"), \
              patch.object(self.app.camera, "start_shutter", return_value=operation) as shutter, \
              patch.object(self.app, "_position_command", wraps=self.app._position_command) as send:
             errors = []
