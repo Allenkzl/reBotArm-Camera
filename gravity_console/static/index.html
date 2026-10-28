@@ -11,6 +11,14 @@
       <div class="arm-status"><span class="status-dot"></span><span id="studio-status">未使能</span></div>
       <button type="button" class="studio-button start-control" id="studio-start"><strong>启动机械臂</strong><span>使能机械臂 · 准备录制</span></button>
       <button type="button" class="studio-button return-control" id="studio-return" disabled><strong>关闭机械臂</strong><span>回到 Home · 然后失能</span></button>
+      <section class="camera-panel" aria-label="蓝牙相机">
+        <button type="button" class="studio-button camera-button" id="camera-connect" disabled>连接蓝牙相机</button>
+        <button type="button" class="studio-button camera-button" id="camera-disconnect" disabled>断开连接</button>
+        <p id="camera-status" class="camera-status" role="status">正在读取相机状态…</p>
+        <p id="camera-operation" class="camera-note" role="status"></p>
+        <p id="camera-error" class="camera-error" role="alert" hidden></p>
+        <details class="camera-settings"><summary>拍照设置</summary><label for="camera-post-delay">拍照后停留（秒）</label><div class="camera-delay"><input id="camera-post-delay" type="number" min="0" max="10" step="0.1" value="1"><button type="button" class="small-button" id="camera-save-settings" disabled>保存</button></div><p class="camera-note">回放到拍照点后停稳拍照，再等待此时长。首次配对请使用原有快门网页完成。</p></details>
+      </section>
       <div class="rail-divider"></div>
       <div class="section-kicker">相机配置</div>
       <button type="button" class="payload-control" id="studio-payload" aria-expanded="false"><span>额定配重</span><strong>950 <small>g</small></strong><span class="payload-caption">查看配置 </span></button>
@@ -27,6 +35,7 @@
         <div class="sequence-toolbar"><label for="studio-gap" class="interval-field"><span>动作间隔</span><span class="interval-input"><input id="studio-gap" type="number" value="5" min="0" max="60" step="1"><span>秒</span></span></label><span class="interval-description">前一个动作完成后，等待再执行下一个</span><button type="button" id="studio-play-group" class="studio-button play-control"><span>播放整组</span></button></div>
         <p id="studio-play-hint" class="group-play-hint" role="status"></p>
         <div id="studio-progress" class="sequence-progress" hidden><div id="studio-progress-label" aria-live="polite"></div><div class="sequence-progress-track"><div id="studio-progress-fill"></div></div></div>
+        <div id="photo-capture-progress" class="photo-capture-progress" role="status" aria-live="polite" hidden></div>
         <div class="sequence-columns"><span>执行顺序 / 动作</span><span>录制与预览</span></div>
         <div id="studio-blocks" class="action-list"></div>
         <button type="button" class="add-action" id="studio-add-action">新增动作块</button>

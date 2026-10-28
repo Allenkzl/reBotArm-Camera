@@ -9,6 +9,7 @@ import math
 import threading
 import time
 import traceback
+import uuid
 from typing import Any
 
 import numpy as np
@@ -26,6 +27,9 @@ class ShootingControl:
             raise RuntimeError("请等待当前操作结束或先关闭机械臂")
 
     def _join_worker(self) -> None:
+        self._photo_run_cancel.set()
+        self.camera.cancel_photo()
+        self._cancel_photo_marks("当前操作已停止，拍照点未添加")
         self.stop_requested.set()
         if self.thread is not None and self.thread.is_alive():
             self.thread.join(timeout=8.0)
@@ -36,6 +40,9 @@ class ShootingControl:
         with self.motor_lock:
             if self.emergency_requested.is_set():
                 raise RuntimeError("机械臂已紧急失能，请重新启动")
+            if self._command_generation != self._cancel_generation:
+                raise RuntimeError("当前请求已被停止操作取消")
+            self._worker_generation = self._command_generation
             self.stop_requested.clear()
 
     def _editable_groups(self) -> None:
@@ -114,6 +121,7 @@ class ShootingControl:
                 scale = np.asarray(sample["effective_scale"], dtype=float)
                 if scale.shape != (6,) or not np.all(np.isfinite(scale)) or np.any(scale < 0) or np.any(scale > 2.0):
                     raise ValueError(f"{name} 补偿倍率无效")
+        self._validate_photo_points(trajectory)
 
     def _trajectory_for_slot(self, slot: int | None) -> dict[str, Any]:
         tr = next((t for t in self._trajectories if t.get("slot") == slot), None)
@@ -134,15 +142,19 @@ class ShootingControl:
         # Every block is validated before any worker is stopped or created.
         for trajectory in trajectories:
             self._validate_trajectory(trajectory)
+        self._photo_camera_preflight(trajectories)
         self._join_worker()
         self._prepare_worker()
+        self._photo_run_nonce = str(uuid.uuid4())
+        self._photo_run_cancel = threading.Event()
+        self._photo_run_post_delay_s = self._photo_post_delay_s
         self._open_run_log("shooting_group" if group else "replay")
         if group:
             self._write_log({"kind": "group_plan", "group_id": group["id"],
                              "blocks": [{"id": b["id"], "name": b["name"], "slot": b["slot"]} for b in group["blocks"]],
                              "skipped_empty_blocks": group.get("skipped_empty_blocks", [])})
         self._playback_hold_scale = self._effective_scale(self.settings)
-        self._set_status(mode="replay_starting", group_playback=None, message="正在准备播放")
+        self._set_status(mode="replay_starting", group_playback=None, photo_capture=None, message="正在准备播放")
         self.thread = threading.Thread(target=self._sequence_loop, args=(trajectories, speed, group),
                                        name="shooting-sequence", daemon=True)
         self.thread.start()
@@ -169,7 +181,7 @@ class ShootingControl:
         return self._play_request(trajectories, float(data.get("speed", .25)), group)
 
     def _check_cancel(self) -> None:
-        if self.stop_requested.is_set() or self.emergency_requested.is_set():
+        if self.stop_requested.is_set() or self.emergency_requested.is_set() or self._worker_generation != self._cancel_generation:
             raise MotionCancelled()
 
     def _position_command(self, q: np.ndarray, scale: np.ndarray) -> None:
@@ -204,7 +216,8 @@ class ShootingControl:
             raise RuntimeError("关节反馈包含无效数值，已中止播放")
         if not self.dry_run and np.max(np.abs(np.rad2deg(target - actual))) > 20:
             raise RuntimeError("轨迹跟踪偏差超过 20°，已中止后续动作")
-        return actual
+        # Simulated motor feedback follows replay targets; never evidence of field tracking.
+        return target.copy() if self.dry_run else actual
 
     def _play_trajectory_block(self, trajectory: dict[str, Any], speed: float) -> np.ndarray:
         samples = trajectory["samples"]
@@ -218,6 +231,9 @@ class ShootingControl:
             self._set_status(group_playback={**self.status.group_playback, "phase": "playing"})
         self._write_log({"kind": "replay_start", "slot": trajectory["slot"], "speed": speed})
         start_time, first_t = time.monotonic(), float(first["t"])
+        points_by_sample: dict[int, list[tuple[int, dict[str, Any]]]] = {}
+        for number, point in enumerate(trajectory.get("photo_points", []), 1):
+            points_by_sample.setdefault(point["sample_index"], []).append((number, point))
         last_status = 0.
         for i, sample in enumerate(samples):
             elapsed = (float(sample["t"]) - first_t) / speed
@@ -232,6 +248,10 @@ class ShootingControl:
             actual = self._tracking_check(target)
             self._write_log({"kind": "replay_sample", "slot": trajectory["slot"], "i": i,
                              "q_target_deg": np.rad2deg(target).tolist(), "q_actual_deg": np.rad2deg(actual).tolist()})
+            for number, point in points_by_sample.get(i, []):
+                began_pause = time.monotonic()
+                self._perform_photo_point(trajectory, point, number, scale)
+                start_time += time.monotonic() - began_pause
             if time.monotonic() - last_status >= .2:
                 self._set_status(mode="replaying", q_deg=np.rad2deg(actual).tolist(),
                                  message=f"正在播放 {trajectory['label']} · {i+1}/{len(samples)}")
@@ -307,6 +327,9 @@ class ShootingControl:
         return self.status.to_json()
 
     def emergency_disable(self) -> dict[str, Any]:
+        self._photo_run_cancel.set()
+        self.camera.cancel_photo()
+        self._cancel_photo_marks("已紧急停止，拍照点未添加")
         self.emergency_requested.set()
         self.stop_requested.set()
         with self.motor_lock:

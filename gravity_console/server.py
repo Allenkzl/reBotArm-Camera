@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import traceback
+import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,9 +24,13 @@ import numpy as np
 if __package__:
     from .shooting_groups import ShootingGroupStore, atomic_write_json
     from .shooting_control import ShootingControl, MotionCancelled
+    from .camera_bridge import CameraBridgeClient
+    from .photo_points import PhotoPointsControl
 else:
     from shooting_groups import ShootingGroupStore, atomic_write_json
     from shooting_control import ShootingControl, MotionCancelled
+    from camera_bridge import CameraBridgeClient
+    from photo_points import PhotoPointsControl
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -167,6 +172,9 @@ class RobotStatus:
     recording_errors: dict[str, str] = field(default_factory=dict)
     shooting_groups: list[dict[str, Any]] = field(default_factory=list)
     group_playback: dict[str, Any] | None = None
+    camera: dict[str, Any] = field(default_factory=dict)
+    recording_photo_points: list[dict[str, Any]] = field(default_factory=list)
+    photo_capture: dict[str, Any] | None = None
     message: str = "ready"
     updated_ms: int = field(default_factory=now_ms)
     revision: int = 0
@@ -197,6 +205,9 @@ class RobotStatus:
             "recording_errors": dict(self.recording_errors),
             "shooting_groups": self.shooting_groups,
             "group_playback": self.group_playback,
+            "camera": self.camera,
+            "recording_photo_points": self.recording_photo_points,
+            "photo_capture": self.photo_capture,
             "rated_camera_kg": 0.95,
             "message": self.message,
             "updated_ms": self.updated_ms,
@@ -204,7 +215,7 @@ class RobotStatus:
         }
 
 
-class GravityConsole(ShootingControl):
+class GravityConsole(PhotoPointsControl, ShootingControl):
     command_clamp_nm = COMMAND_CLAMP_NM
     replay_kp = REPLAY_KP
     replay_kd = REPLAY_KD
@@ -234,6 +245,10 @@ class GravityConsole(ShootingControl):
         self.command_lock = threading.RLock()
         self.motor_lock = threading.RLock()
         self.emergency_requested = threading.Event()
+        self._cancel_generation = 0
+        self._cancel_lock = threading.Lock()
+        self._command_generation = 0
+        self._worker_generation = 0
         self.events: list[dict[str, Any]] = []
         self.subscribers: list[queue.Queue[dict[str, Any]]] = []
         self.thread: threading.Thread | None = None
@@ -246,15 +261,41 @@ class GravityConsole(ShootingControl):
         self._temp_cfg = self._temp_dir / "rebotarm_camera_j1j6.yaml"
         make_j1j6_config(self._temp_cfg)
         self._log_file = None
+        self._pending_photo_marks: list[dict[str, Any]] = []
+        self._photo_last_mark_time = 0.
+        self._photo_run_cancel = threading.Event()
+        self._photo_run_nonce = ""
         self._load_presets()
         self._load_trajectories()
         self._groups = ShootingGroupStore(group_file or log_dir / "shooting_groups.json", self._trajectories)
+        self._load_photo_settings()
+        self.camera = CameraBridgeClient(log_dir / "photo_journal.jsonl", dry_run=dry_run,
+                                         on_update=self._camera_update)
         self._set_status(message="准备就绪，请启动机械臂")
+        self.camera.start()
+
+    def _camera_update(self, info: dict[str, Any]) -> None:
+        self._set_status(camera={**info, "post_delay_s": self._photo_post_delay_s})
+
+    def request_cancel(self, *, emergency: bool = False) -> None:
+        # These signals precede command/motor locks, including slow connect/HTTP paths.
+        self.stop_requested.set()
+        self._photo_run_cancel.set()
+        if emergency:
+            self.emergency_requested.set()
+        with self._cancel_lock:
+            self._cancel_generation += 1
+        self.camera.cancel_photo()
+        self._cancel_photo_marks("操作已停止，拍照点未添加")
 
     def close(self) -> None:
+        self._photo_run_cancel.set()
+        self.camera.cancel_photo()
+        self._cancel_photo_marks("服务正在关闭，拍照点未添加")
         self.stop_requested.set()
         if self.thread is not None and self.thread.is_alive():
             self.thread.join(timeout=2.0)
+        self.camera.close()
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
     def _load_robot_modules(self) -> None:
@@ -320,6 +361,7 @@ class GravityConsole(ShootingControl):
                 setattr(self.status, key, value)
             if hasattr(self, "_groups"):
                 self.status.shooting_groups = self._groups.snapshot(self._trajectory_summaries())
+            self.status.recording_photo_points = self._point_summary(self.recording.get("photo_points", [])) if self.recording else []
             self.status.updated_ms = now_ms()
             self.status.revision += 1
             snapshot = self.status.to_json()
@@ -384,6 +426,7 @@ class GravityConsole(ShootingControl):
                     "camera_profile": traj.get("camera_profile", DEFAULT_CAMERA_PROFILE),
                     "start_q_deg": traj.get("start_q_deg"),
                     "end_q_deg": traj.get("end_q_deg"),
+                    "photo_points": self._point_summary(traj.get("photo_points", [])),
                 }
             )
         summaries.sort(key=lambda item: int(item.get("slot") or 99))
@@ -437,6 +480,9 @@ class GravityConsole(ShootingControl):
                 raise RuntimeError("gravity compensation is already running")
             self.settings = self._validated_settings(data)
             with self.motor_lock:
+                if self._command_generation != self._cancel_generation:
+                    raise RuntimeError("启动请求已被停止操作取消")
+                self._worker_generation = self._command_generation
                 self.emergency_requested.clear()
             self.stop_requested.clear()
             run_id = time.strftime("gc_console_%Y%m%d_%H%M%S")
@@ -555,7 +601,7 @@ class GravityConsole(ShootingControl):
                 raise RuntimeError("wait for current motion to finish before recording")
             self.settings = self._validated_settings(data)
             if self.thread is None or not self.thread.is_alive():
-                self.stop_requested.clear()
+                self._prepare_worker()
                 run_id = time.strftime("gc_console_%Y%m%d_%H%M%S")
                 self.log_dir.mkdir(parents=True, exist_ok=True)
                 log_path = self.log_dir / f"{run_id}.jsonl"
@@ -593,10 +639,11 @@ class GravityConsole(ShootingControl):
                 "run_id": self.status.run_id,
                 "camera_profile": self.settings.camera_profile,
                 "samples": [],
+                "photo_points": [],
             }
             if not self.thread.is_alive():
                 self.thread.start()
-        self._set_status(recording_slot=slot, recording_samples=0, message=f"recording {label}")
+        self._set_status(recording_slot=slot, recording_samples=0, photo_capture=None, message=f"recording {label}")
         self._event("info", f"recording started: {label}", slot=slot)
         return self.status.to_json()
 
@@ -608,6 +655,7 @@ class GravityConsole(ShootingControl):
             rec = self.recording
             if slot and int(rec.get("slot", -1)) != slot:
                 raise RuntimeError(f"currently recording Pose {rec.get('slot')}")
+            self._cancel_photo_marks("录制已停止，尚未采样的拍照点未添加")
             self.recording = None
         samples = rec.get("samples") or []
         if len(samples) < 8:
@@ -630,6 +678,7 @@ class GravityConsole(ShootingControl):
             "start_q_deg": samples[0]["q_deg"],
             "end_q_deg": samples[-1]["q_deg"],
             "samples": samples,
+            "photo_points": rec.get("photo_points", []),
         }
         try:
             self._validate_trajectory(trajectory)
@@ -800,7 +849,7 @@ class GravityConsole(ShootingControl):
                 return
             samples = self.recording["samples"]
             min_dt = RECORD_EVERY_N / 30.0
-            if len(samples) > 0 and float(t) - float(samples[-1]["t"]) < min_dt:
+            if len(samples) > 0 and float(t) - float(samples[-1]["t"]) < min_dt and not self._pending_photo_marks:
                 return
             sample = {
                 "t": round(float(t), 3),
@@ -815,6 +864,7 @@ class GravityConsole(ShootingControl):
                 "camera_profile": camera_profile,
             }
             samples.append(sample)
+            self._capture_photo_marks(sample, len(samples)-1)
             slot = int(self.recording["slot"])
             count = len(samples)
         if count % 8 == 0:
@@ -833,7 +883,7 @@ class GravityConsole(ShootingControl):
                     self.robot = self._ensure_robot()
                     self.robot.connect()
                 with self.motor_lock:
-                    if self.emergency_requested.is_set() or self.stop_requested.is_set():
+                    if self.emergency_requested.is_set() or self.stop_requested.is_set() or self._worker_generation != self._cancel_generation:
                         raise MotionCancelled()
                     self.robot.arm.mode_mit()
                     self.robot.arm.enable()
@@ -1002,10 +1052,16 @@ class Handler(BaseHTTPRequestHandler):
             data = self._read_json()
             if not isinstance(data, dict):
                 raise ValueError("请求必须为 JSON 对象")
-            if path == "/api/emergency-disable":
-                self.app.emergency_requested.set()
-                self.app.stop_requested.set()
+            if path in ("/api/stop", "/api/home-disable", "/api/emergency-disable"):
+                self.app.request_cancel(emergency=path == "/api/emergency-disable")
+                generation = self.app._cancel_generation
+            else:
+                with self.app.lock:
+                    generation = self.app._cancel_generation
             with self.app.command_lock:
+                if path in {"/api/start", "/api/blocks/record", "/api/start-recording", "/api/blocks/play", "/api/groups/play", "/api/replay-trajectory", "/api/blocks/photo-points"} and generation != self.app._cancel_generation:
+                    raise RuntimeError("请求已被停止操作取消，请重新确认后操作")
+                self.app._command_generation = generation
                 result = self._dispatch_post(path, data)
             self._send_json(result)
         except Exception as exc:
@@ -1015,6 +1071,8 @@ class Handler(BaseHTTPRequestHandler):
         action = path.removeprefix("/api/")
         if action in {"groups/add", "groups/update", "groups/delete", "blocks/add", "blocks/update", "blocks/delete"}:
             return self.app.groups_command(action, data)
+        if action in {"camera/connect", "camera/disconnect", "camera/settings"}:
+            return self.app.camera_command(action.split("/")[-1], data)
         routes = {
             "/api/start": self.app.start,
             "/api/apply": self.app.apply,
@@ -1028,6 +1086,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/blocks/stop-recording": self.app.stop_block_recording,
             "/api/blocks/play": self.app.play_block,
             "/api/groups/play": self.app.play_group,
+            "/api/blocks/photo-points": self.app.mark_photo_point,
+            "/api/blocks/photo-points/delete": self.app.delete_photo_point,
         }
         if path in routes:
             return routes[path](data)
