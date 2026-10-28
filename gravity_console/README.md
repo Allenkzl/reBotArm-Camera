@@ -1,6 +1,6 @@
 # 拍摄工作台
 
-当前升级分支：`feature/camera-photo-points`。真实机械臂默认 J1–J6，J7 不注册。
+当前版本已合并至 `main`（2026-10-28，原开发分支 `feature/camera-photo-points`）。真实机械臂默认 J1–J6，J7 不注册。
 
 ## 使用
 
