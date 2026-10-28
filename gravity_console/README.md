@@ -59,3 +59,5 @@ node --check gravity_console/static/app.js
 2026-10-28：53项工作台测试及12项原快门桥测试通过（共65项）。浏览器/隔离模拟验证空格只记录、保存后回放到点停稳、一次模拟快门、停留后继续。新增取消代次检查，停止先取消待处理标记/快门，避免排队旧请求启动新动作。实机部署备份为 `/home/com/reBotArm-Camera/logs/deployment-backups/camera-photo-points-20261028_111409/`；源码哈希匹配，轨迹/组/预设字节未变，机械臂 idle/enabled=false，原快门桥进程未重启、计数仍为2。页面显示ESP在线、相机未连接；真实联动与停稳参数由用户继续验收。
 
 直接拍照修正已备份部署：`/home/com/reBotArm-Camera/logs/deployment-backups/photo-direct-20261028_112908/`。部署后工作台PID82507、idle/enabled=false，相机就绪；轨迹/分组/预设/拍照配置/快门记录哈希均未变，快门计数部署前后均为3，未执行真实运动或拍照。
+
+2026-10-28用户完成现场试用，确认当前直接触发版本的整个功能链路已跑通。基本联动验收通过；成像质量、长期运行及全部异常路径仍需后续专项验证。详见 `docs/sessions/2026-10-28-feature-camera-photo-points.md`。
