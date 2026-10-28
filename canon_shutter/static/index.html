@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canon Shutter · 相机遥控</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <a class="brand" href="/" aria-label="Canon Shutter 首页"><span class="brand-mark">◉</span> SHUTTER<span class="brand-light"> / CONTROL</span></a>
+      <span id="usbBadge" class="badge"><i></i><span>等待 USB 设备</span></span>
+    </header>
+
+    <section class="intro">
+      <p class="eyebrow">XIAO ESP32S3 SENSE × CANON EOS</p>
+      <h1>连接相机。<br><span>留住这一刻。</span></h1>
+      <p class="lede">从这里配对、连接，让快门在你需要的时候落下。</p>
+    </section>
+
+    <div id="alert" class="alert" role="alert" hidden></div>
+
+    <section class="controls" aria-label="相机控制">
+      <article class="connection panel">
+        <div class="panel-heading"><span class="eyebrow">01 / CONNECTION</span><span id="stateBadge" class="state">设备离线</span></div>
+        <div class="camera-symbol" aria-hidden="true"><div class="camera-top"></div><div class="camera-body"><span class="camera-led"></span><div class="lens"><div></div></div></div></div>
+        <h2 id="cameraName">等待你的相机</h2>
+        <p id="statusMessage" class="status-message" aria-live="polite">连接 XIAO 的 USB 数据线后，设备状态会自动显示。</p>
+        <div class="details"><span>遥控器名称</span><b id="remoteName">XIAO-Shutter</b><span>已保存相机</span><b id="savedCamera">—</b></div>
+        <div class="connection-buttons">
+          <button id="connect" class="button dark" disabled>配对新相机 <span aria-hidden="true">↗</span></button>
+          <button id="disconnect" class="button light" disabled>断开连接</button>
+        </div>
+        <div id="candidates" class="candidate-box" hidden>
+          <label for="cameraSelect">搜索到的相机</label>
+          <div class="candidate-row"><select id="cameraSelect"></select><button id="connectSelected" class="button dark" disabled>连接所选</button></div>
+        </div>
+        <div class="secondary-actions"><button id="scan" disabled>重新搜索</button><button id="forget" disabled>清除配对 / 更换相机</button></div>
+      </article>
+
+      <article class="capture panel">
+        <div class="panel-heading"><span class="eyebrow">02 / CAPTURE</span><span class="single">SINGLE SHOT</span></div>
+        <div class="shutter-wrap"><button id="shutter" class="shutter" disabled aria-label="拍照，触发一次相机快门"><span class="shutter-icon" aria-hidden="true">◎</span><span>拍照</span></button></div>
+        <p id="shutterHint" class="shutter-hint">连接相机后即可拍照</p>
+        <div class="shot-count"><span>本次设备启动已发送</span><strong id="shotCount">00</strong><span>次快门指令</span></div>
+        <p class="capture-note">照片保存在佳能相机存储卡中。<br>指令发送成功后，请在相机上确认拍摄结果。</p>
+      </article>
+    </section>
+
+    <section class="guide" aria-label="首次配对说明">
+      <div class="guide-title"><span class="eyebrow">FIRST CONNECTION</span><h2>第一次，按这三步来。</h2></div>
+      <ol>
+        <li><span>1</span><div><h3>相机进入配对画面</h3><p>R6：Wi-Fi/蓝牙连接 → 连接至无线遥控器 → 添加要连接的设备。</p></div></li>
+        <li><span>2</span><div><h3>点击「配对新相机」</h3><p>保持相机在配对画面。仅找到一台时自动连接，多台时请从列表选择；留意相机上的确认提示。</p></div></li>
+        <li><span>3</span><div><h3>设置遥控拍摄，再按快门</h3><p>切到照片模式，驱动模式选择「自拍：10 秒/遥控」或「自拍：2 秒/遥控」。首次测试可先手动对焦。</p></div></li>
+      </ol>
+      <p class="switch-note">换相机时，先清除本机配对。重新配对同一台相机时，也请在相机菜单里删除旧遥控器的连接信息。</p>
+    </section>
+
+    <details class="activity" open><summary>连接记录 <span>LIVE ACTIVITY</span></summary><ol id="events"><li class="empty">等待设备状态…</li></ol></details>
+    <footer><span>本机网页 → USB → XIAO → 蓝牙 → 佳能相机</span><span id="firmware">等待固件</span></footer>
+  </main>
+</body>
+</html>
