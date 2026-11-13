@@ -179,9 +179,10 @@ class PhotoPointsTests(unittest.TestCase):
              patch.object(self.app, "_perform_photo_point", side_effect=capture):
             self.app._play_trajectory_block(tr, 1)
         self.assertEqual(captures, [(tr["photo_points"][0]["id"], 1), (tr["photo_points"][1]["id"], 2)])
-        self.assertGreaterEqual(commands[3]-returned[0], .017)
-        self.assertGreaterEqual(commands[6]-returned[1], .017)
-        self.assertEqual(len(commands), 8)
+        for resumed in returned:
+            following = next(t for t in commands if t > resumed)
+            self.assertGreaterEqual(following-resumed, .025)
+        self.assertGreaterEqual(len(commands), 8)
 
     def test_real_simulated_shutter_once_with_distinct_point_keys(self):
         self.connected()
@@ -221,6 +222,70 @@ class PhotoPointsTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "normal tracking abort"):
                 self.app._perform_photo_point(tr, tr["photo_points"][0], 1, np.array([.8]*6))
             shutter.assert_not_called()
+
+    def test_hold_diagnostics_capture_offset_clipping_and_single_shutter(self):
+        self.connected()
+        tr = trajectory()
+        p = point(tr)
+        tr["photo_points"] = [p]
+        self.app._photo_run_post_delay_s = .07
+        offset = np.deg2rad([-.7, 2.37, -3.25, -1., 2.11, 1.71])
+        model = np.array([0., 20., 0., 0., 0., 0.])
+        records = []
+        with patch.object(self.app, "_tracking_check", return_value=offset), \
+             patch.object(self.app, "_estimate_payload", return_value=(model, np.zeros(6))), \
+             patch.object(self.app, "_write_log", side_effect=records.append), \
+             patch.object(self.app.camera, "start_shutter", wraps=self.app.camera.start_shutter) as shutter:
+            self.app._perform_photo_point(tr, p, 1, np.array([.8]*6))
+        shutter.assert_called_once()
+        holds = [r for r in records if r["kind"] == "photo_hold_sample"]
+        self.assertGreaterEqual(len(holds), 2)
+        self.assertEqual(holds[0]["phase"], "arrival")
+        self.assertIn("post_delay", [r["phase"] for r in holds])
+        np.testing.assert_allclose(holds[0]["error_actual_minus_target_deg"], np.rad2deg(offset))
+        self.assertEqual(holds[0]["tau_ff_unclipped_nm"][1], 16.)
+        self.assertEqual(holds[0]["tau_ff_cmd_nm"][1], 9.)
+        self.assertEqual(holds[0]["ff_clipped"], [False, True, False, False, False, False])
+        self.assertTrue(all(r["dry_run"] for r in holds))
+        self.assertEqual(sum(r["kind"] == "photo_shutter_request" for r in records), 1)
+        self.assertEqual(sum(r["kind"] == "photo_shutter_result" for r in records), 1)
+        self.assertIsNone(self.app._photo_diagnostic_context)
+
+    def test_hold_diagnostic_context_cleared_on_tracking_failure(self):
+        tr = trajectory()
+        p = point(tr)
+        tr["photo_points"] = [p]
+        records = []
+        with patch.object(self.app, "_tracking_check", side_effect=RuntimeError("tracking abort")), \
+             patch.object(self.app, "_write_log", side_effect=records.append), \
+             patch.object(self.app.camera, "start_shutter") as shutter:
+            with self.assertRaisesRegex(RuntimeError, "tracking abort"):
+                self.app._perform_photo_point(tr, p, 1, np.array([.8]*6))
+        shutter.assert_not_called()
+        self.assertIsNone(self.app._photo_diagnostic_context)
+        self.assertEqual(records[-1]["kind"], "photo_point_error")
+
+    def test_diagnostics_follow_waiting_result_without_extra_commands(self):
+        tr = trajectory()
+        p = point(tr)
+        tr["photo_points"] = [p]
+        operation = Operation("shutter", "diagnostic-test")
+        records = []
+        def feedback(target):
+            if self.app._photo_diagnostic_context["phase"] == "waiting_result":
+                operation._finish("completed", "simulated", True)
+            return target.copy()
+        with patch.object(self.app, "_tracking_check", side_effect=feedback) as read, \
+             patch.object(self.app, "_send_mit") as send, \
+             patch.object(self.app, "_write_log", side_effect=records.append), \
+             patch.object(self.app.camera, "start_shutter", return_value=operation) as shutter:
+            self.app._perform_photo_point(tr, p, 1, np.array([.8]*6))
+        holds = [r for r in records if r["kind"] == "photo_hold_sample"]
+        self.assertEqual([r["phase"] for r in holds], ["arrival", "waiting_result"])
+        self.assertEqual(send.call_count, len(holds))
+        self.assertEqual(read.call_count, len(holds))
+        shutter.assert_called_once()
+        self.assertEqual([r["elapsed_s"] for r in holds], sorted(r["elapsed_s"] for r in holds))
 
     def test_cancel_before_handoff_never_calls_camera(self):
         tr = trajectory()

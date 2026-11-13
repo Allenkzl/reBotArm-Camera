@@ -12,6 +12,7 @@ import threading
 import time
 import traceback
 import uuid
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,11 +27,13 @@ if __package__:
     from .shooting_control import ShootingControl, MotionCancelled
     from .camera_bridge import CameraBridgeClient
     from .photo_points import PhotoPointsControl
+    from .hold_diagnostics import HoldDiagnostics
 else:
     from shooting_groups import ShootingGroupStore, atomic_write_json
     from shooting_control import ShootingControl, MotionCancelled
     from camera_bridge import CameraBridgeClient
     from photo_points import PhotoPointsControl
+    from hold_diagnostics import HoldDiagnostics
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -44,13 +47,20 @@ LOOSE_KP = np.array([0.1, 0.1, 0.1, 0.1, 0.1, 0.1], dtype=float)
 LOOSE_KD = np.array([0.35, 0.35, 0.35, 0.35, 0.25, 0.25], dtype=float)
 REPLAY_KP = np.array([8.0, 30.0, 35.0, 22.0, 5.0, 5.0], dtype=float)
 REPLAY_KD = np.array([0.8, 2.0, 2.4, 1.8, 0.4, 0.4], dtype=float)
-# Supervised camera tests: J2 max +100 deg, J4 max +80 deg, J6 min -70 deg.
+# Supervised camera tests: J1-J6 max +100 deg; J5 min -40 deg.
 # Software replay bounds, not calibrated physical/collision limits.
-SOFT_MIN_DEG = np.array([-55.0, -8.0, -1.5, -70.0, -35.0, -70.0], dtype=float)
-SOFT_MAX_DEG = np.array([55.0, 100.0, 80.0, 80.0, 35.0, 90.0], dtype=float)
+SOFT_MIN_DEG = np.array([-55.0, -8.0, -1.5, -70.0, -40.0, -70.0], dtype=float)
+SOFT_MAX_DEG = np.array([100.0, 100.0, 100.0, 100.0, 100.0, 100.0], dtype=float)
 RECORD_EVERY_N = 2
 DEFAULT_CAMERA_PROFILE = "heavy"
 CAMERA_PROFILES = {
+    "unloaded_50g": {
+        "label": "无相机 · 50 g",
+        "total_camera_kg": 0.05,
+        "payload_kg": 0.05,
+        "payload_offset_local_m": [0., 0., 0.],
+        "note": "去除旧夹爪模型，50 克按 J6 参考原点估算",
+    },
     "light": {
         "label": "Light Camera",
         "payload_kg": 0.0,
@@ -160,6 +170,7 @@ class RobotStatus:
     joint_percent: list[float] = field(default_factory=lambda: DEFAULT_JOINT_PERCENT.tolist())
     camera_profile: str = DEFAULT_CAMERA_PROFILE
     effective_scale: list[float] = field(default_factory=lambda: (DEFAULT_JOINT_PERCENT / 100.0).tolist())
+    home_q_deg: list[float] = field(default_factory=lambda: [0.0] * 6)
     q_deg: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_model_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
     tau_payload_nm: list[float] = field(default_factory=lambda: [0.0] * 6)
@@ -194,6 +205,7 @@ class RobotStatus:
             "camera_profiles": CAMERA_PROFILES,
             "effective_scale": self.effective_scale,
             "q_deg": self.q_deg,
+            "home_q_deg": self.home_q_deg,
             "tau_model_nm": self.tau_model_nm,
             "tau_payload_nm": self.tau_payload_nm,
             "tau_total_nm": self.tau_total_nm,
@@ -215,7 +227,7 @@ class RobotStatus:
         }
 
 
-class GravityConsole(PhotoPointsControl, ShootingControl):
+class GravityConsole(HoldDiagnostics, PhotoPointsControl, ShootingControl):
     command_clamp_nm = COMMAND_CLAMP_NM
     replay_kp = REPLAY_KP
     replay_kd = REPLAY_KD
@@ -256,6 +268,7 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
         self.robot = None
         self._robot_modules_loaded = False
         self._model = None
+        self._unloaded_model = None
         self._frame_id = None
         self._temp_dir = Path(tempfile.mkdtemp(prefix="rebot-camera-console-"))
         self._temp_cfg = self._temp_dir / "rebotarm_camera_j1j6.yaml"
@@ -268,6 +281,16 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
         self._load_presets()
         self._load_trajectories()
         self._groups = ShootingGroupStore(group_file or log_dir / "shooting_groups.json", self._trajectories)
+        home_path = APP_DIR.parent / "config/user_home.json"
+        if not dry_run:
+            home_data = json.loads(home_path.read_text())
+            self._home_q = np.deg2rad(np.asarray(home_data["q_deg"], dtype=float))
+            self._assert_soft_limits(self._home_q, label="用户 Home")
+            if home_data.get("reference_id") != "user-home-20261113":
+                raise ValueError("Home 基准标识不一致，请检查配置")
+        else:
+            self._home_q = np.zeros(6)
+        self._set_status(home_q_deg=np.rad2deg(self._home_q).tolist())
         self._load_photo_settings()
         self.camera = CameraBridgeClient(log_dir / "photo_journal.jsonl", dry_run=dry_run,
                                          on_update=self._camera_update)
@@ -527,6 +550,8 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
         self._editable_groups()
         settings = self._validated_settings(data)
         with self.lock:
+            if self.status.enabled and settings.camera_profile != self.settings.camera_profile:
+                raise RuntimeError("请先关闭机械臂，再切换末端负载")
             self.settings = settings
         self._set_status(
             base_percent=float(np.mean(settings.joint_percent)),
@@ -766,6 +791,27 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
         self._model = load_robot_model()
         self._frame_id = get_end_effector_frame_id(self._model)
 
+    def _ensure_unloaded_model(self):
+        if self._unloaded_model is None:
+            tree = ET.parse(self.robot_root / "urdf/RS/urdf/ReBot_Arm_RS.urdf")
+            expected = {"gripper_end", "gripper_left", "gripper_right"}
+            found = set()
+            for link in tree.getroot().findall("link"):
+                name = link.get("name")
+                if name not in expected:
+                    continue
+                inertial = link.find("inertial")
+                if inertial is not None:
+                    link.remove(inertial)
+                found.add(name)
+            if found != expected:
+                raise RuntimeError("无法核对旧夹爪模型，50 克模式未启动")
+            model = pin.buildModelFromXML(ET.tostring(tree.getroot(), encoding="unicode"))
+            if (model.nq, model.nv, list(model.names)) != (self._model.nq, self._model.nv, list(self._model.names)):
+                raise RuntimeError("50 克模型的关节与原模型不一致")
+            self._unloaded_model = model
+        return self._unloaded_model
+
     def _estimate_payload(self, q6: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         profile = self._camera_profile()
         payload_kg = float(profile["payload_kg"])
@@ -779,20 +825,20 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
         from reBotArm_control_py.kinematics.robot_model import pad_q_for_model
         assert self._model is not None
         assert self._frame_id is not None
-        q_model = pad_q_for_model(self._model, q6, controlled_joints=6)
-        data = self._model.createData()
-        tau_model = compute_generalized_gravity(model=self._model, q=q_model, data=data)[:6]
-        data = self._model.createData()
-        pin.forwardKinematics(self._model, data, q_model)
-        pin.computeJointJacobians(self._model, data, q_model)
-        pin.updateFramePlacements(self._model, data)
-        jac = pin.getFrameJacobian(
-            self._model,
-            data,
-            self._frame_id,
-            pin.ReferenceFrame.LOCAL_WORLD_ALIGNED,
-        )
-        r_world = data.oMf[self._frame_id].rotation @ payload_offset
+        unloaded = profile["name"] == "unloaded_50g"
+        model = self._ensure_unloaded_model() if unloaded else self._model
+        frame = model.getFrameId("link6") if unloaded else self._frame_id
+        if frame >= len(model.frames):
+            raise RuntimeError("50 克模型缺少 J6 参考帧")
+        q_model = pad_q_for_model(model, q6, controlled_joints=6)
+        data = model.createData()
+        tau_model = compute_generalized_gravity(model=model, q=q_model, data=data)[:6]
+        data = model.createData()
+        pin.forwardKinematics(model, data, q_model)
+        pin.computeJointJacobians(model, data, q_model)
+        pin.updateFramePlacements(model, data)
+        jac = pin.getFrameJacobian(model, data, frame, pin.ReferenceFrame.LOCAL_WORLD_ALIGNED)
+        r_world = data.oMf[frame].rotation @ payload_offset
         skew = np.array(
             [[0, -r_world[2], r_world[1]], [r_world[2], 0, -r_world[0]], [-r_world[1], r_world[0], 0]],
             dtype=float,
@@ -870,6 +916,35 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
         if count % 8 == 0:
             self._set_status(recording_slot=slot, recording_samples=count, message=f"recording Pose {slot}: {count} samples")
 
+    def _startup_feedback_preflight(self) -> np.ndarray:
+        """Require explicit J1-J6 parameter replies, never a cached zero pose."""
+        started = time.monotonic()
+        poses = []
+        for round_index in range(2):
+            values = []
+            for index in range(6):
+                self._check_cancel()
+                name = f"joint{index+1}"
+                motor = getattr(self.robot.arm, "_mm", {}).get(name)
+                if motor is None:
+                    raise RuntimeError(f"启动检查失败：J{index+1}未注册，未使能")
+                try:
+                    value = float(motor.robstride_get_param_f32(0x7019, timeout_ms=250))
+                except Exception as exc:
+                    raise RuntimeError(f"启动检查失败：J{index+1}无有效实时位置回复，请检查电机电源/CAN；未使能") from exc
+                self._check_cancel()
+                if not math.isfinite(value):
+                    raise RuntimeError(f"启动检查失败：J{index+1}位置非有限数值，未使能")
+                values.append(value)
+            q = np.array(values)
+            self._write_log({"kind": "startup_feedback", "round": round_index+1,
+                             "source": "robstride_parameter_0x7019", "q_deg": deg(q),
+                             "elapsed_s": time.monotonic()-started})
+            poses.append(q)
+        if np.max(np.abs(poses[1]-poses[0])) > math.radians(2):
+            raise RuntimeError("启动检查失败：两轮位置变化超过2°，请保持机械臂稳定后重新启动；未使能")
+        return poses[-1]
+
     def _run_loop(self, *, enable: bool = False) -> None:
         current_scale = self._effective_scale(self.settings)
         rate_hz = 30.0
@@ -882,12 +957,27 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
                 if self.robot is None:
                     self.robot = self._ensure_robot()
                     self.robot.connect()
+                q_start = self._startup_feedback_preflight()
+                # Complete model imports/calculation while motors are still
+                # disabled, so initialization cannot delay the first hold.
+                self._estimate_payload(q_start)
+                self._assert_soft_limits(q_start, label="启动姿态")
+                self._assert_soft_limits(self._home_q, label="新 Home")
+                self._check_cancel()
                 with self.motor_lock:
                     if self.emergency_requested.is_set() or self.stop_requested.is_set() or self._worker_generation != self._cancel_generation:
                         raise MotionCancelled()
                     self.robot.arm.mode_mit()
+                    self._check_cancel()
+                    # Once enable is attempted, errors must not claim disabled
+                    # or silently unload a potentially suspended camera.
+                    self._set_status(enabled=True, connected=True, q_deg=deg(q_start))
                     self.robot.arm.enable()
-            self._set_status(mode="running", connected=True, enabled=True, message="running")
+            if enable and not self.dry_run:
+                self._set_status(mode="homing", message="启动检查通过，正在自动返回新 Home，完成后保持使能")
+                self._home_and_disable(disable=False)
+                return
+            self._set_status(mode="running", connected=True, enabled=True, message="手动摆位模式")
             while not self.stop_requested.is_set():
                 loop_t = time.time()
                 q = self._read_positions(loop_t - t0)
@@ -969,6 +1059,10 @@ class GravityConsole(PhotoPointsControl, ShootingControl):
             tb = traceback.format_exc()
             self._write_log({"kind": "error", "error": repr(exc), "traceback": tb})
             self._event("danger", f"control error: {exc!r}")
+            if enable and not self.status.enabled:
+                self._shutdown_robot(self.robot)
+                self.robot = None
+                self._set_status(connected=False)
             self._set_status(mode="error", message=repr(exc))
         finally:
             if self._log_file is not None:
@@ -1052,14 +1146,14 @@ class Handler(BaseHTTPRequestHandler):
             data = self._read_json()
             if not isinstance(data, dict):
                 raise ValueError("请求必须为 JSON 对象")
-            if path in ("/api/stop", "/api/home-disable", "/api/emergency-disable"):
+            if path in ("/api/stop", "/api/home-disable", "/api/home-hold", "/api/emergency-disable"):
                 self.app.request_cancel(emergency=path == "/api/emergency-disable")
                 generation = self.app._cancel_generation
             else:
                 with self.app.lock:
                     generation = self.app._cancel_generation
             with self.app.command_lock:
-                if path in {"/api/start", "/api/blocks/record", "/api/start-recording", "/api/blocks/play", "/api/groups/play", "/api/replay-trajectory", "/api/blocks/photo-points"} and generation != self.app._cancel_generation:
+                if path in {"/api/start", "/api/blocks/record", "/api/start-recording", "/api/blocks/play", "/api/groups/play", "/api/replay-trajectory", "/api/blocks/photo-points", "/api/diagnostics/hold", "/api/diagnostics/photo-framing", "/api/home-hold", "/api/home-disable"} and generation != self.app._cancel_generation:
                     raise RuntimeError("请求已被停止操作取消，请重新确认后操作")
                 self.app._command_generation = generation
                 result = self._dispatch_post(path, data)
@@ -1074,6 +1168,8 @@ class Handler(BaseHTTPRequestHandler):
         if action in {"camera/connect", "camera/disconnect", "camera/settings"}:
             return self.app.camera_command(action.split("/")[-1], data)
         routes = {
+            "/api/diagnostics/hold": self.app.diagnose_hold,
+            "/api/diagnostics/photo-framing": self.app.check_photo_framing,
             "/api/start": self.app.start,
             "/api/apply": self.app.apply,
             "/api/save-preset": self.app.save_preset,
@@ -1093,6 +1189,8 @@ class Handler(BaseHTTPRequestHandler):
             return routes[path](data)
         if path == "/api/stop":
             return self.app.stop_hold()
+        if path == "/api/home-hold":
+            return self.app.home_hold()
         if path == "/api/home-disable":
             return self.app.home_disable()
         if path == "/api/emergency-disable":

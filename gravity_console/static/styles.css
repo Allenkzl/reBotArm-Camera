@@ -96,3 +96,62 @@ body{margin:0;padding:20px;background:#f3f2ed}#shooting-studio{max-width:1400px;
 #shooting-studio .group-play-hint{margin:10px 20px 4px;font-size:12px;color:var(--st-muted)}#shooting-studio .recording-error{margin:7px 0 0;color:var(--st-danger);font-size:11px;line-height:1.65;overflow-wrap:anywhere}#shooting-studio .play-hint{font-size:11px;color:var(--st-muted);flex-basis:100%;text-align:right}
 
 #shooting-studio .camera-panel{margin-top:17px;min-width:0}#shooting-studio .camera-button{width:100%;margin-top:7px;white-space:normal;font-size:12px}#shooting-studio .camera-status,#shooting-studio .camera-note{font-size:11px;line-height:1.65;overflow-wrap:anywhere;margin:9px 0 0;color:var(--st-muted)}#shooting-studio .camera-error{color:var(--st-danger);font-size:11px;line-height:1.65;overflow-wrap:anywhere;margin:8px 0 0}#shooting-studio .camera-settings{font-size:11px;margin-top:13px}#shooting-studio .camera-settings summary{cursor:pointer;color:var(--st-muted)}#shooting-studio .camera-settings label{display:block;margin-top:10px}#shooting-studio .camera-delay{display:flex;gap:6px;margin-top:6px}#shooting-studio #camera-post-delay{width:65px;min-width:0;border:1px solid var(--st-line);border-radius:4px;padding:5px;background:var(--st-bg)}#shooting-studio .photo-points{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}#shooting-studio .photo-point{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--st-line);background:var(--st-tint);border-radius:4px;padding:3px 6px;font-size:11px}#shooting-studio .delete-photo-point{border:0;background:transparent;min-width:24px;min-height:24px;padding:1px 4px;color:var(--st-danger)}#shooting-studio .photo-point-count,#shooting-studio .photo-hotkey{font-size:11px;color:var(--st-muted);margin:7px 0 0}#shooting-studio .photo-hotkey kbd{border:1px solid var(--st-line);border-radius:3px;padding:0 4px}#shooting-studio .mark-photo-point{color:var(--st-green);border-color:var(--st-green)}#shooting-studio .photo-capture-progress{padding:12px 20px;color:var(--st-green);background:var(--st-tint);border-bottom:1px solid var(--st-line);font-size:12px}#shooting-studio .photo-capture-progress[data-error="true"]{color:var(--st-danger)}@media(max-width:540px){#shooting-studio .camera-panel{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;margin-top:0}#shooting-studio .camera-status,#shooting-studio .camera-note,#shooting-studio .camera-error,#shooting-studio .camera-settings{grid-column:1/-1}#shooting-studio .camera-button{margin-top:0}#shooting-studio .camera-settings{margin-top:5px}#shooting-studio .photo-capture-progress{padding:11px 13px}}@media(pointer:coarse){#shooting-studio .delete-photo-point{min-width:36px;min-height:36px}}
+
+.hold-cue{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:13px 20px;margin:0 0 12px;border:2px solid #64748b;border-radius:10px;background:#f1f5f9;color:#172238}
+.hold-cue-copy{display:grid;gap:3px;flex:1 1 260px}
+#hold-cue-badge,#hold-cue-detail{font-size:13px}
+#hold-cue-instruction{font-size:clamp(19px,3vw,32px);line-height:1.2}
+.hold-cue-seconds{font-size:clamp(24px,4vw,42px);font-weight:800;min-width:4.5em;text-align:center;font-variant-numeric:tabular-nums}
+.hold-cue[data-phase=ready],.hold-cue[data-phase=ending]{background:#fff4d9;border-color:#9a580a;color:#472b05}
+.hold-cue[data-phase=release]{background:#ddf7e9;border-color:#167746;color:#103d29}
+.hold-cue[data-phase=done]{background:#eef2ff;border-color:#5556a8;color:#26275d}
+
+.hold-monitor{position:sticky;top:0;z-index:10}
+.live-angles{margin:0 0 8px;padding:12px 16px;border:1px solid #354450;border-radius:10px;background:#172129;color:#f0f5f8}
+.live-angles-header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+#live-angles-status,.live-angle small{font-size:12px;color:#c4d1da}
+.live-angles-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+.live-angle{display:grid;gap:2px;padding:6px 8px;border:1px solid #4c5f6d;border-radius:6px;font-variant-numeric:tabular-nums}
+.live-angle-value{font-size:clamp(16px,2.5vw,30px);white-space:nowrap}
+.live-angle[data-state=ready]{border-color:#57ac87}.live-angle[data-state=ready] .live-angle-value{color:#90e3b8}
+.live-angle[data-state=adjust] .live-angle-value{color:#ffd196}
+@media(max-width:760px){.live-angles-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+
+.framing-cue[hidden],#framing-cue-preview[hidden]{display:none}
+.framing-cue{position:sticky;top:8px;z-index:20;display:flex;flex-direction:column;gap:4px;margin:0 0 12px;padding:12px 18px;border:3px solid #fff0a2;border-radius:10px;background:#ffda56;color:#231a00;box-shadow:0 6px 20px #0008}
+.framing-cue strong{font-size:clamp(24px,4vw,40px);line-height:1.15}
+.framing-cue span{font-size:clamp(14px,2vw,18px);font-weight:650}
+#framing-cue-preview{margin:0 0 10px}
+
+#shooting-studio{overflow:clip}
+
+/* Shared sticky stack keeps the status banner above live joint readings. */
+.hold-monitor .framing-cue{position:relative;top:auto;margin-bottom:8px}
+.framing-cue[data-state=idle]{background:#e2e8f0;border-color:#94a3b8;color:#172238}
+.framing-cue[data-state=moving]{background:#dbeafe;border-color:#60a5fa;color:#172d56}
+.framing-cue[data-state=ready]{background:#dcfce7;border-color:#4ade80;color:#14532d}
+.framing-cue[data-state=error]{background:#fee2e2;border-color:#f87171;color:#7f1d1d}
+
+.top-emergency{display:block;width:100%;margin:0 0 8px;padding:15px 20px;border:3px solid #ffb4b4;background:#b91c1c;color:white;font-size:clamp(19px,3vw,28px);font-weight:800;box-shadow:0 4px 16px #0007}
+.top-emergency:disabled{opacity:.55}
+
+/* Keep controls and state in the rail, with telemetry aligned to the workspace. */
+#shooting-studio .control-rail .framing-cue{position:relative;top:auto;z-index:auto;padding:12px 10px;margin-bottom:18px;box-shadow:none;border-width:2px;overflow-wrap:anywhere}
+#shooting-studio .control-rail .framing-cue strong{font-size:21px;line-height:1.35}
+#shooting-studio .control-rail .framing-cue span{font-size:13px;line-height:1.5;font-weight:500}
+#shooting-studio .rail-emergency{display:block;width:100%;margin:12px 0 18px;padding:12px 8px;border:2px solid #fca5a5;background:#b91c1c;color:#fff;font-size:16px;font-weight:800;border-radius:8px}
+#shooting-studio .rail-emergency:disabled{opacity:.55}
+#shooting-studio .studio-main>.hold-monitor{top:8px;margin-bottom:20px}
+#shooting-studio .live-angles-header{flex-wrap:wrap}
+@media(max-width:540px){#shooting-studio .control-rail .framing-cue{grid-column:1/-1;margin:0}#shooting-studio .rail-emergency{grid-column:1/-1}#shooting-studio .studio-main>.hold-monitor{position:relative;top:0}}
+
+#shooting-studio .status-overview{display:grid;grid-template-columns:190px minmax(0,1fr);position:sticky;top:0;z-index:20;background:var(--st-paper);border-bottom:1px solid var(--st-line)}
+#shooting-studio .status-overview-left{padding:16px 12px;min-width:0}
+#shooting-studio .status-overview-right{padding:16px 28px;min-width:0}
+#shooting-studio .status-overview .framing-cue{position:static;margin:0;padding:12px 10px;box-shadow:none;border-width:2px;height:100%;box-sizing:border-box;justify-content:center;overflow-wrap:anywhere}
+#shooting-studio .status-overview .framing-cue strong{font-size:21px;line-height:1.35}
+#shooting-studio .status-overview .framing-cue span{font-size:13px;line-height:1.5}
+#shooting-studio .status-overview .hold-monitor{position:static}
+#shooting-studio .status-overview .live-angles{margin:0}
+@media(max-width:760px){#shooting-studio .status-overview{grid-template-columns:165px minmax(0,1fr)}#shooting-studio .status-overview-right{padding:16px 18px}}
+@media(max-width:540px){#shooting-studio .status-overview{grid-template-columns:1fr;position:relative}#shooting-studio .status-overview-left{padding:12px 12px 0}#shooting-studio .status-overview-right{padding:12px}}

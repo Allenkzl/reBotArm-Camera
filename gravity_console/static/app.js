@@ -1,5 +1,6 @@
 "use strict";
 (() => {
+  const playbackSpeed = .5;
   const root = document.querySelector('#shooting-studio');
   const $ = selector => root.querySelector(selector);
   const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -14,8 +15,11 @@
   const editable = () => online && !blocked() && !active();
   const ready = () => online && !blocked() && status.enabled === true && (status.connected === true || status.dry_run === true) && ['running','holding'].includes(status.mode) && !active();
   const playbackHint = () => !online ? '网页服务未连接' : !status.enabled ? '请先启动机械臂' : blocked() ? '请等待当前请求完成' : active() ? '请先结束录制或停止当前动作' : !['running','holding'].includes(status.mode) ? '请先处理机械臂异常状态' : '';
+  const pointMode = () => status.camera_profile === 'heavy';
   const cameraReady = () => status.camera?.ready === true && !status.camera?.requires_review && !status.camera?.busy;
   const photoPoints = trajectory => Array.isArray(trajectory?.photo_points) ? trajectory.photo_points : [];
+  const precisionReplay = trajectory => status.camera_profile === 'unloaded_50g' &&
+    trajectory?.camera_profile === 'unloaded_50g' && photoPoints(trajectory).length > 0;
   const photoCount = blocks => blocks.reduce((count, block) => count + photoPoints(block.trajectory).length, 0);
   const cameraHint = () => !online ? '网页服务未连接' : status.camera?.requires_review ? '拍照结果待核实，请检查相机后重新点击连接确认' : !status.camera?.bridge_online ? '相机桥未连接' : !status.camera?.device_online ? 'ESP32 未连接' : status.camera?.busy ? '相机正在处理操作' : !status.camera?.connected ? '请先连接蓝牙相机' : '相机尚未就绪';
   const replayHint = blocks => playbackHint() || (photoCount(blocks) && !cameraReady() ? cameraHint() : '');
@@ -29,13 +33,176 @@
     while ($('#runtime-events').children.length > 100) $('#runtime-events').lastChild.remove();
     if (['danger','error'].includes(event.level)) note(event.message || '运行异常', true);
   }
+  let angleTargets = Array(6).fill(null);
+  const angleGrid = $('#live-angles-grid');
+  let referenceCaptured = false;
+  function renderAngleTargets() {
+    angleGrid.innerHTML = angleTargets.map((target, i) => `
+    <div class="live-angle">
+      <span>J${i + 1}</span><strong class="live-angle-value">—</strong>
+      <small>目标 ${Number.isFinite(target) && Number.isFinite(status.home_q_deg?.[i]) ? (target-status.home_q_deg[i]).toFixed(2) + '°' : '—'} · <span class="live-angle-error">偏差 —</span></small>
+    </div>`).join('');
+  }
+  renderAngleTargets();
+  function renderLiveAngles() {
+    const live = online && Date.now() - lastReceived < 1000 &&
+      status.connected === true && status.enabled === true &&
+      Array.isArray(status.q_deg) && status.q_deg.length === 6 &&
+      status.q_deg.every(Number.isFinite);
+    $('#live-angles-status').textContent = live ? '实时反馈 · 目标容差 ±0.5°' :
+      online && status.enabled === false ? '已失能 · 暂无实时反馈' : '等候实时反馈';
+    const homeReading = referenceCaptured && online && status.enabled === false &&
+      status.message?.includes('已返回 Home') && Array.isArray(status.q_deg) &&
+      status.q_deg.length === 6 && status.q_deg.every(Number.isFinite);
+    if (homeReading) $('#live-angles-status').textContent = '回 Home 时读数 · 已失能';
+    Array.from(angleGrid.children).forEach((card, i) => {
+      const angle = live || homeReading ? status.q_deg[i] : null;
+      const error = angle !== null && Number.isFinite(angleTargets[i]) ? angle - angleTargets[i] : null;
+      card.dataset.state = live && error !== null ? (Math.abs(error) <= .5 ? 'ready' : 'adjust') : 'idle';
+      card.querySelector('.live-angle-value').textContent = angle !== null && Number.isFinite(status.home_q_deg?.[i]) ? (angle-status.home_q_deg[i]).toFixed(2) + '°' : '—';
+      card.querySelector('.live-angle-error').textContent = error !== null
+        ? '偏差 ' + (error > 0 ? '+' : '') + error.toFixed(2) + '°' : '偏差 —';
+    });
+  }
+
+  let holdPreviewStarted = null;
+  const framingCue = $('#framing-cue');
+  function renderFramingCue() {
+    const message = status.message || '';
+    const mode = status.mode;
+    const capture = status.photo_capture;
+    let title = '正在获取机械臂状态', detail = '等待工作台连接', tone = 'waiting';
+    if (!online || Date.now() - lastReceived >= 2000) {
+      title = '连接中断 · 机械臂状态未知';
+      detail = '请检查网络及现场机械臂状态';
+      tone = 'error';
+    } else if (mode === 'error' || (status.enabled && capture?.phase === 'error')) {
+      title = '操作已停止 · 请检查';
+      detail = mode === 'error' ? message : capture.message;
+      tone = 'error';
+    } else if (mode === 'starting') {
+      title = '机械臂正在启动'; detail = '正在检查反馈并准备控制'; tone = 'moving';
+    } else if (mode === 'homing') {
+      title = '机械臂正在返回 Home'; detail = message; tone = 'moving';
+    } else if (!status.enabled) {
+      title = '机械臂已失能'; detail = message.includes('已返回 Home') ? '已返回 Home，等待下一次操作' : '等待启动机械臂'; tone = 'idle';
+    } else if (/正在返回 Home/.test(message)) {
+      title = '拍照完成 · 正在返回 Home'; detail = message; tone = 'moving';
+    } else if (mode === 'replaying' && /正在核对六轴/.test(message)) {
+      title = '正在校正拍摄点 · 等待到位'; detail = message; tone = 'waiting';
+    } else if (mode === 'replaying' && ['triggering','waiting_result','post_delay'].includes(capture?.phase)) {
+      title = {triggering:'已到达拍摄点 · 正在触发快门', waiting_result:'已到达拍摄点 · 等待相机结果', post_delay:'拍照完成 · 正在保持位置'}[capture.phase];
+      detail = capture.message || message; tone = capture.phase === 'post_delay' ? 'ready' : 'waiting';
+    } else if (mode === 'replaying' && /正在前往|平稳回放/.test(message)) {
+      title = '机械臂正在运动 · 前往拍摄点'; detail = message; tone = 'moving';
+    } else if (mode === 'replay_starting') {
+      title = '正在准备回放'; detail = '正在检查动作与相机状态'; tone = 'waiting';
+    } else if (mode === 'group_waiting') {
+      title = '等待下一个动作'; detail = message; tone = 'waiting';
+    } else if (mode === 'holding') {
+      title = /已返回 Home/.test(message) ? '已返回 Home · 保持使能' :
+        /精度测试通过|构图对照完成/.test(message) ? '已到达拍摄点 · 保持位置' : '机械臂已停止 · 保持使能';
+      detail = message; tone = 'ready';
+    } else if (mode === 'running' && /Home/.test(message)) {
+      title = /保持到位/.test(message) ? '新 Home 保持到位' : '正在固定保持新 Home';
+      detail = message; tone = /保持到位/.test(message) ? 'ready' : 'waiting';
+    } else if (mode === 'running' && status.recording_slot != null && pointMode() && !cameraReady()) {
+      title = '正在录制 · 相机尚未就绪';
+      detail = '空格和鼠标打点需要相机就绪。请先停止录制，再连接蓝牙相机。';
+      tone = 'error';
+    } else if (mode === 'running' && status.recording_slot != null) {
+      title = /等待单次快门/.test(message) ? '点位已记录 · 等待拍照结果' :
+        /快门指令已完成/.test(message) ? '点位已记录 · 拍照指令完成' : '正在录制 · 请手动摆位';
+      detail = /点位|快门|拍照点/.test(message) ? message : '摆到目标后稳住，按空格记录点位';
+      tone = 'waiting';
+    } else if (mode === 'replaying') {
+      title = /已到拍照点|请拍照/.test(message) ? '已到达拍摄点' : '机械臂正在执行动作';
+      detail = message || '执行中，请保持活动范围畅通'; tone = 'moving';
+    } else {
+      title = '机械臂已启动 · 等待操作'; detail = '可开始录制或回放'; tone = 'ready';
+    }
+    const cameraOperation = status.camera?.operation;
+    if (online && Date.now() - lastReceived < 2000 && ['running','idle','disabled'].includes(mode) &&
+        status.camera?.busy && cameraOperation?.action !== 'shutter') {
+      detail = cameraOperation?.message || '正在处理相机连接操作';
+    }
+    $('#framing-cue-heading').textContent = title;
+    $('#framing-cue-detail').textContent = detail;
+    framingCue.dataset.state = tone;
+    framingCue.hidden = false;
+  }
+
+  function renderHoldCue() {
+    renderFramingCue();
+    renderLiveAngles();
+    const panel = $('#hold-cue');
+    const preview = $('#hold-cue-preview');
+    const isHold = /(?:^|\/)hold_diagnostic_/.test(status.log_path || '');
+    const activeHold = isHold && status.mode === 'replaying';
+    const fresh = online && Date.now() - lastReceived < 1000;
+    const match = /^原位保持诊断：([0-9.]+)秒$/.exec(status.message || '');
+    const liveSeconds = match ? Number(match[1]) : null;
+    if (!online || status.enabled !== false) holdPreviewStarted = null;
+    const demo = holdPreviewStarted !== null;
+    const elapsed = demo ? (performance.now() - holdPreviewStarted) / 1000 : 0;
+    const seconds = demo ? Math.max(0, 12 - elapsed) : liveSeconds;
+    let phase = 'idle';
+    let instruction = '等待测试，继续托稳';
+    let detail = '出现松手提示前，请持续托住相机和支架。';
+    let countdown = '—';
+    if (demo || (activeHold && fresh && status.enabled === true && status.connected === true)) {
+      phase = 'ready';
+      instruction = '请继续托稳，等松手提示';
+      detail = '正在确认起始位置。';
+      if ((demo && elapsed >= 2) || (!demo && seconds !== null && Number.isFinite(seconds))) {
+        countdown = seconds.toFixed(1) + ' 秒';
+        phase = seconds > 2 ? 'release' : seconds > 0 ? 'ending' : 'done';
+        instruction = phase === 'release' ? '现在缓慢松手' :
+          phase === 'ending' ? '即将结束，保持当前托举状态' : '测试结束，请托稳相机';
+        detail = '双手留在旁边。若相机明显下沉或抖动，立即托住并点「紧急停止」。';
+      }
+    } else if (activeHold) {
+      phase = 'ready';
+      instruction = '实时状态中断，请继续托稳';
+      detail = '等待工作台恢复实时状态。';
+    } else if (isHold && ['holding','error'].includes(status.mode)) {
+      phase = 'done';
+      instruction = '测试已结束，请托稳相机';
+      detail = status.message || '请等待收尾指令。';
+    }
+    panel.dataset.phase = phase;
+    $('#hold-cue-badge').textContent = demo ? '演示模式 · 请勿实际松手' : '无快门保持测试';
+    $('#hold-cue-instruction').textContent = instruction;
+    $('#hold-cue-detail').textContent = demo ? '这是界面演示。实际操作以正式测试的提示为准。' : detail;
+    $('#hold-cue-seconds').textContent = countdown;
+    preview.textContent = demo ? '退出演示' : '预览 10 秒倒计时';
+    preview.disabled = !online || status.enabled !== false;
+  }
+  $('#hold-cue-preview').addEventListener('click', () => {
+    if (!online || status.enabled !== false) return;
+    holdPreviewStarted = holdPreviewStarted === null ? performance.now() : null;
+    renderHoldCue();
+  });
+  setInterval(renderHoldCue, 100);
+
   function update(next) {
     const firstSnapshot = !Object.hasOwn(status, 'updated_ms');
     const nextTime = Number(next.updated_ms) || 0, currentTime = Number(status.updated_ms) || 0;
     const nextRevision = Number(next.revision) || 0, currentRevision = Number(status.revision) || 0;
     if (nextTime < currentTime || (nextTime === currentTime && nextRevision < currentRevision)) return false;
     status = next; online = true; lastReceived = Date.now();
-    if (!recording()) consumedSpace = false;
+    const atHome = status.mode === 'homing' || /已返回 Home|保持新 Home|Home 保持到位/.test(status.message || '');
+    const reference = atHome ? status.home_q_deg : status.photo_capture?.precision_reference_deg;
+    if (Array.isArray(reference) && reference.length === 6 && reference.every(Number.isFinite) &&
+        (reference.some((x, i) => x !== angleTargets[i]) || !referenceCaptured ||
+         $('#live-angle-title').dataset.reference !== (atHome ? 'home' : 'point'))) {
+      angleTargets = reference.slice();
+      referenceCaptured = true;
+      $('#live-angle-title').dataset.reference = atHome ? 'home' : 'point';
+      $('#live-angle-title').textContent = atHome ? '六轴实时角度 · 新 Home（相对零位）' : '六轴实时角度 · 当前打点（相对新 Home）';
+      renderAngleTargets();
+    }
+    renderHoldCue();
     render();
     if (firstSnapshot) note(status.enabled ? '已连接机械臂服务，请确认当前运行状态' : '已连接，点击「启动机械臂」开始操作');
     return true;
@@ -67,7 +234,8 @@
     $('#studio-status').textContent = !online ? '连接中断 / 状态未知' : `${modes[status.mode] || status.mode || '状态未知'}${enabled ? ' · 已使能' : ''}${recording() ? ' · 录制中' : ''}`;
     $('#connection-label').textContent = !online ? '未连接网页服务' : status.dry_run ? '模拟服务 · 不控制电机' : '实机服务 · J1–J6';
     $('#studio-start').disabled = !online || blocked() || enabled || busy;
-    $('#studio-return').disabled = !online || blocked() || !enabled || ['starting','homing'].includes(status.mode);
+    $('#studio-return').disabled = !online || (!enabled && status.mode !== 'starting') || status.mode === 'homing' || urgentPaths.has('/api/home-disable');
+    $('#studio-home').disabled = !online || !enabled || recording() || status.mode === 'homing' || urgentPaths.has('/api/home-hold');
     // Stopping remains reachable even while another request is in flight.
     $('#studio-emergency').disabled = !online || (!enabled && status.mode !== 'starting') || urgentPaths.has('/api/stop');
     $('#direct-disable').disabled = !online || (!enabled && status.mode !== 'starting') || urgentPaths.has('/api/emergency-disable');
@@ -91,11 +259,14 @@
     $('#studio-play-group').disabled = playing ? !online || blocked() : !g || !ready() || recorded === 0 || (photoCount(g.blocks) > 0 && !cameraReady());
     const skipped = (g?.blocks.length || 0) - recorded;
     $('#studio-play-hint').textContent = playing ? '停止后保持使能，可继续录制或关闭机械臂。' : `${replayHint(g?.blocks || []) ? replayHint(g?.blocks || []) + ' · ' : ''}将按顺序播放 ${recorded} 个已保存动作，跳过 ${skipped} 个空动作，共 ${photoCount(g?.blocks || [])} 张照片${recorded ? '' : '；请先录制动作'}。`;
-    const nextRows = JSON.stringify([g,online,blocked(),busy,enabled,status.mode,status.connected,status.dry_run,status.recording_slot,status.group_playback?.block_id,status.recording_errors,status.recording_photo_points,status.camera?.ready,status.camera?.requires_review,status.camera?.busy,status.camera?.bridge_online,status.camera?.device_online,status.camera?.connected]);
+    const nextRows = JSON.stringify([g,online,blocked(),busy,enabled,status.mode,status.connected,status.dry_run,status.camera_profile,status.recording_slot,status.group_playback?.block_id,status.recording_errors,status.recording_photo_points,status.camera?.ready,status.camera?.requires_review,status.camera?.busy,status.camera?.bridge_online,status.camera?.device_online,status.camera?.connected]);
     if (nextRows !== rowsKey) {
       $('#studio-blocks').innerHTML = g ? g.blocks.map((block,index) => {
         const rec = isRecording(block), selected = String(status.group_playback?.block_id) === String(block.id), trajectory = block.trajectory;
-        const error = recordingError(block.slot), hint = replayHint([block]);
+        const error = recordingError(block.slot), precision = precisionReplay(trajectory);
+        const pointReplay = pointMode() && trajectory?.camera_profile === 'heavy' && photoPoints(trajectory).length > 0;
+        const hint = precision ? playbackHint() : pointMode() && trajectory && !pointReplay
+          ? '请在 950 克配置下录制并按空格打点' : replayHint([block]);
         const points = rec ? (status.recording_photo_points || []) : photoPoints(trajectory);
         const canDeletePoint = online && !blocked() && (rec || editable());
         return `<div class="action-row ${rec || selected ? 'is-active':''}">
@@ -103,15 +274,15 @@
           <div class="action-content">
             <input class="action-name" data-name="${esc(block.id)}" aria-label="动作 ${index+1} 名称" value="${esc(block.name)}" maxlength="60" ${!editable()?'disabled':''}>
             <div class="action-meta"><span class="record-dot"></span><span class="${rec?'recording-label':''}" ${rec?'id="recording-meta"':''}>${rec ? '正在录制' : trajectory ? `已保存 · ${Number(trajectory.duration_s).toFixed(1)} 秒 · ${Number(trajectory.sample_count)||0} 点` : '暂无已保存录制'}</span><span>J1–J6 轨迹</span></div>
-            <p class="photo-point-count">${points.length} 个拍照点${rec ? ' · 仅记录位置，不立即拍照' : ''}</p>
+            <p class="photo-point-count">${points.length} 个拍照点${rec ? (pointMode() ? ' · 空格记点并拍照' : ' · 仅记录位置') : ''}</p>
             ${points.length ? `<div class="photo-points">${points.map((point, pointIndex) => `<span class="photo-point">拍照点 ${pointIndex+1} · ${Number(point.t || 0).toFixed(1)} 秒<button type="button" class="delete-photo-point" data-delete-point="${esc(point.id)}" data-point-block="${esc(block.id)}" aria-label="删除拍照点 ${pointIndex+1}" ${canDeletePoint ? '' : 'disabled'}>×</button></span>`).join('')}</div>` : ''}
-            ${rec ? '<p class="photo-hotkey">按 <kbd>空格</kbd>或点击「设置拍照点」记录，回放时拍照</p>' : ''}
+            ${rec ? `<p class="photo-hotkey">按 <kbd>空格</kbd>${pointMode() ? '保存六轴位置并拍照，请保持姿势至结果出现' : '保存六轴位置'}。</p>` : ''}
             ${error ? `<p class="recording-error" role="status">录制未保存：${esc(error)}${trajectory ? '；原有已保存轨迹仍保留，播放将使用原轨迹。' : '；请调整姿态后重新录制。'}</p>` : ''}
           </div>
           <div class="action-tools">
             <button type="button" class="small-button" data-record="${esc(block.id)}" ${rec ? (!online||blocked()?'disabled':'') : (!ready()?'disabled':'')}>${rec?'停止录制':trajectory?'重新录制':'开始录制'}</button>
             ${rec ? `<button type="button" class="small-button mark-photo-point" data-mark-point="${esc(block.id)}" ${online && !blocked() ? '' : 'disabled'}>设置拍照点</button>` : ''}
-            ${trajectory ? `<button type="button" class="small-button" data-play="${esc(block.id)}" ${!ready() || !!hint ? 'disabled':''} title="${esc(hint || `播放已保存轨迹，拍摄 ${photoPoints(trajectory).length} 张照片`)}">单独播放</button>${hint ? `<span class="play-hint">${esc(hint)}</span>` : ''}` : ''}
+            ${trajectory ? `<button type="button" class="small-button" data-play="${esc(block.id)}" ${!ready() || !!hint ? 'disabled':''} title="${esc(hint || (precision ? '到首个打点测试六轴 ±0.5°，不触发快门' : `播放已保存轨迹，拍摄 ${photoPoints(trajectory).length} 张照片`))}">${precision ? '无快门精度回放' : pointMode() ? '按点回放' : '单独播放'}</button>${hint ? `<span class="play-hint">${esc(hint)}</span>` : ''}` : ''}
             <button type="button" class="delete-action" data-remove="${esc(block.id)}" aria-label="删除动作 ${index+1}" ${!editable()||g.blocks.length<=1?'disabled':''}>×</button>
           </div>
         </div>`;
@@ -126,17 +297,24 @@
       const phase = {transition:'移动到动作起点',playing:'播放动作',waiting:'等待下一个动作'}[playback.phase] || playback.phase;
       $('#studio-progress-label').textContent = `整组播放 · ${playback.index} / ${playback.total} · ${phase}${playback.phase==='waiting'?` · 剩余 ${Math.ceil(Number(playback.remaining_s)||0)} 秒`:''}`;
       $('#studio-progress-fill').style.width = `${Math.min(100,Math.max(0,(Number(playback.index)-1)/Math.max(1,Number(playback.total))*100))}%`;
-    } else if (playing) { $('#studio-progress-label').textContent = '正在播放单个动作…'; $('#studio-progress-fill').style.width = '0%'; }
+    } else if (playing) { $('#studio-progress-label').textContent = status.message?.startsWith('原位保持诊断：') ? status.message : '正在播放单个动作…'; $('#studio-progress-fill').style.width = '0%'; }
     const capture = status.photo_capture;
     $('#photo-capture-progress').hidden = !capture;
     if (capture) {
       const phase = {settling:'停稳中',triggering:'正在发出快门指令',waiting_result:'等待相机结果',post_delay:'拍照后停留',complete:'拍照点已完成',error:'拍照异常'}[capture.phase] || capture.phase;
       $('#photo-capture-progress').dataset.error = String(capture.phase === 'error');
-      $('#photo-capture-progress').textContent = `拍照 ${capture.index || '—'} / ${capture.total || '—'} · ${phase}${capture.message ? ' · '+capture.message : ''}`;
+      $('#photo-capture-progress').textContent = capture.precision_reference_deg && !capture.phase
+        ? status.message
+        : `拍照 ${capture.index || '—'} / ${capture.total || '—'} · ${phase}${capture.message ? ' · '+capture.message : ''}`;
     }
     $('#runtime-summary').textContent = `控制状态：${status.mode || '未知'} · 电机连接：${!online?'未知':status.connected?'已连接':'未连接'} · 日志：${status.log_path || '暂无'}`;
-    $('#runtime-joints').innerHTML = ['J1','J2','J3','J4','J5','J6'].map((joint,index) => `<span>${joint} ${online && status.connected && Number.isFinite(status.q_deg?.[index]) ? status.q_deg[index].toFixed(1)+'°':'—'}</span>`).join('');
-    $('#runtime-profile').textContent = `固定相机总重：950 克 · 补偿比例：${(status.joint_percent || [80,80,80,80,80,80]).join(' / ')}% · 速度：25%`;
+    const profile = status.camera_profiles?.[status.camera_profile];
+    const grams = Number.isFinite(profile?.total_camera_kg) ? Math.round(profile.total_camera_kg * 1000) : null;
+    $('#payload-weight').textContent = grams === null ? '—' : String(grams);
+    $('#payload-rated').value = grams === null ? '' : String(grams);
+    $('#payload-mode').textContent = profile?.label || '等待负载配置';
+    $('#payload-note').textContent = profile?.note || '';
+    $('#runtime-profile').textContent = `负载配置：${profile?.label || '等待配置'}${pointMode() ? ' · 单动作按点拍照' : ''} · 补偿比例：${(status.joint_percent || [80,80,80,80,80,80]).join(' / ')}% · 速度：${playbackSpeed * 100}%`;
   }
   function renderCamera() {
     const camera = status.camera || {}, usable = editable() && !camera.busy;
@@ -162,7 +340,11 @@
   function markPhotoPoint() {
     const target = currentRecordingBlock();
     if (!target || !online || blocked() || !status.enabled) return false;
-    mutate('/api/blocks/photo-points', target, payload => `已记录拍照点 ${payload.recording_photo_points?.length || 0}，回放时拍照`);
+    if (pointMode() && !cameraReady()) { note(cameraHint(), true); return true; }
+    if (pointMode()) note('正在记录点位并发送快门，请保持姿势');
+    mutate('/api/blocks/photo-points', {...target, point_mode:pointMode()}, payload => pointMode()
+      ? '六轴点位已记录，快门指令已完成，请查看相机'
+      : `已记录拍照点 ${payload.recording_photo_points?.length || 0}`);
     return true;
   }
   $('#camera-connect').onclick = () => {
@@ -184,14 +366,28 @@
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing) return;
     const target = event.target;
     if (target?.isContentEditable || target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]')) return;
-    if (markPhotoPoint()) { event.preventDefault(); consumedSpace = true; }
+    if (markPhotoPoint()) { event.preventDefault(); consumedSpace = true; return; }
+    if (status.camera_profile !== 'unloaded_50g' || !online || blocked() || !status.connected ||
+        !status.enabled || status.mode !== 'running' || Date.now() - lastReceived >= 500 ||
+        !Array.isArray(status.q_deg) || status.q_deg.length !== 6 || !status.q_deg.every(Number.isFinite)) return;
+    angleTargets = status.q_deg.slice();
+    referenceCaptured = true;
+    $('#live-angle-title').textContent = '六轴实时角度 · 空格记录点';
+    renderAngleTargets();
+    renderLiveAngles();
+    note('已记录六轴参考角度');
+    event.preventDefault();
+    consumedSpace = true;
   });
   document.addEventListener('keyup', event => {
     if ((event.code === 'Space' || event.key === ' ') && consumedSpace) { event.preventDefault(); consumedSpace = false; }
   });
   function ids(blockId) { return {group_id:group().id, ...(blockId == null ? {} : {block_id:group().blocks.find(block=>String(block.id)===String(blockId)).id})}; }
-  $('#studio-start').onclick = () => { if (confirm('启动机械臂并进入可拖动录制模式？请确认人在旁边且周围无障碍。')) mutate('/api/start',{camera_profile:'heavy',joint_percent:status.joint_percent || [80,80,80,80,80,80]},'启动请求已提交，请等待设备确认'); };
-  $('#studio-return').onclick = () => { if (confirm('关闭机械臂：中止当前动作，返回 Home 零位后失能。请在旁保护，回到安全姿态前保持支撑。')) mutate('/api/home-disable',{},'已请求返回 Home，完成后将失能；请观察设备状态'); };
+  $('#studio-start').onclick = () => { if (confirm('启动后机械臂会从当前位置自动返回新 Home，然后固定保持。请确认整段回程畅通、人员离开运动范围。')) mutate('/api/start',{camera_profile:status.camera_profile || 'heavy',joint_percent:status.joint_percent || [80,80,80,80,80,80]},'启动请求已提交，请等待设备确认'); };
+  $('#studio-home').onclick = () => {
+    if (confirm('返回 Home 零位并保持使能？请确认回程畅通。')) urgent('/api/home-hold','已请求回零点，完成后保持使能');
+  };
+  $('#studio-return').onclick = () => { if (confirm('中止当前动作，回 Home 后失能？请确认回程畅通。')) urgent('/api/home-disable','已请求返回 Home，完成后将失能'); };
   async function urgent(path, message) {
     // Emergency controls bypass ordinary pending requests, but block new motion.
     if (!online || urgentPaths.has(path)) return;
@@ -220,7 +416,7 @@
     if (photoCount(saved) && !cameraReady()) { note(cameraHint(),true); return; }
     const order = g.blocks.flatMap((block,index)=>block.trajectory ? [`${index+1}. ${block.name}${recordingError(block.slot) ? '（本次录制失败，使用原有已保存轨迹）' : ''}`] : []).join(' → ');
     const skip = empty.length ? `\n将跳过 ${empty.length} 个空动作：${empty.map(block=>block.name).join('、')}。` : '\n组内全部动作均有已保存轨迹，不跳过动作。';
-    if (confirm(`按顺序播放「${g.name}」的 ${saved.length} 个已保存动作？\n执行顺序：${order}${skip}\n本组将拍摄 ${photoCount(saved)} 张照片；相机状态：${cameraReady() ? '已就绪' : '未就绪（本组无拍照点，不影响播放）'}。\n动作间隔 ${g.interval_s} 秒，完成后保持使能。`)) mutate('/api/groups/play',{...ids(),speed:.25},'整组播放已提交');
+    if (confirm(`按顺序播放「${g.name}」的 ${saved.length} 个已保存动作？\n执行顺序：${order}${skip}\n回放速度：${playbackSpeed * 100}%。本组将拍摄 ${photoCount(saved)} 张照片；相机状态：${cameraReady() ? '已就绪' : '未就绪（本组无拍照点，不影响播放）'}。\n动作间隔 ${g.interval_s} 秒，完成后保持使能。`)) mutate('/api/groups/play',{...ids(),speed:playbackSpeed},'整组播放已提交');
   };
   $('#studio-blocks').onchange = event => { const input=event.target.closest('[data-name]'); if(input && editable()){const name=input.value.trim();if(!name){rowsKey='';render();return;}mutate('/api/blocks/update',{...ids(input.dataset.name),name},'动作名称已保存');} };
   $('#studio-blocks').onclick = event => {
@@ -233,13 +429,29 @@
     }
     const remove=event.target.closest('[data-remove]'), record=event.target.closest('[data-record]'), play=event.target.closest('[data-play]');
     if(remove && editable()){if(confirm('删除这个动作块？此操作不可撤销。'))mutate('/api/blocks/delete',ids(remove.dataset.remove),'动作块已删除');return;}
-    if(record){const block=group()?.blocks.find(item=>String(item.id)===record.dataset.record);if(!block)return;if(isRecording(block)){mutate('/api/blocks/stop-recording',ids(block.id),'动作录制已保存');return;}if(!ready())return;if(block.trajectory && !confirm('重新录制将替换此动作的已有轨迹，继续？'))return;mutate('/api/blocks/record',ids(block.id),'正在录制，请手动拖动机械臂，完成后点击停止录制');return;}
+    if(record){const block=group()?.blocks.find(item=>String(item.id)===record.dataset.record);if(!block)return;if(isRecording(block)){mutate('/api/blocks/stop-recording',ids(block.id),'动作录制已保存');return;}if(!ready())return;if(pointMode() && !cameraReady()){note('请先连接蓝牙相机，再开始录制和打点。'+cameraHint(),true);return;}if(!confirm(block.trajectory ? '请托稳机械臂。重新录制会切换手动摆位，并替换此动作已有轨迹，继续？' : '请先托稳机械臂。开始录制将切换手动摆位模式，继续？'))return;mutate('/api/blocks/record',ids(block.id),'正在录制，请手动拖动机械臂，完成后点击停止录制');return;}
     if (play && ready()) {
       const block = group()?.blocks.find(item=>String(item.id)===play.dataset.play);
       if (!block?.trajectory) return;
+      if (pointMode()) {
+        if (block.trajectory.camera_profile !== 'heavy' || !photoPoints(block.trajectory).length) {
+          note('请在 950 克配置下录制并按空格打点', true); return;
+        }
+        if (!cameraReady()) { note(cameraHint(), true); return; }
+        if (confirm('开始按点回放？六轴同时在 ±0.5° 内持续 2 秒才拍照；最后一张拍完保持 2 秒，再回 Home 并保持使能。请确认往返路线畅通、人员离开运动范围。')) {
+          mutate('/api/blocks/play',{...ids(block.id),speed:playbackSpeed,point_mode:true},'按点回放已提交');
+        }
+        return;
+      }
+      if (precisionReplay(block.trajectory)) {
+        if (confirm('开始无快门精度回放？机械臂会走到第一个打点，尝试微调并保持。请确认路径畅通、人员离开运动范围。')) {
+          mutate('/api/blocks/play',{...ids(block.id),speed:playbackSpeed},'无快门精度回放已提交');
+        }
+        return;
+      }
       if (photoPoints(block.trajectory).length && !cameraReady()) { note(cameraHint(),true); return; }
       const previous = recordingError(block.slot) ? '\n注意：最近一次录制未保存，将播放原有已保存轨迹。' : '';
-      if (confirm(`播放「${block.name}」？机械臂将先移动到记录起点，再执行轨迹。\n将拍摄 ${photoPoints(block.trajectory).length} 张照片；相机状态：${cameraReady() ? '已就绪' : '未就绪（此动作无拍照点，不影响播放）'}。${previous}`)) mutate('/api/blocks/play',{...ids(play.dataset.play),speed:.25},'动作播放已提交');
+      if (confirm(`播放「${block.name}」？机械臂将先移动到记录起点，再执行轨迹。\n回放速度：${playbackSpeed * 100}%。将拍摄 ${photoPoints(block.trajectory).length} 张照片；相机状态：${cameraReady() ? '已就绪' : '未就绪（此动作无拍照点，不影响播放）'}。${previous}`)) mutate('/api/blocks/play',{...ids(play.dataset.play),speed:playbackSpeed},'动作播放已提交');
     }
   };
   let polling=false;

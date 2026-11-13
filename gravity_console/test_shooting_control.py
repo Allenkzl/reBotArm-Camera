@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from gravity_console.server import GravityConsole
+from gravity_console.server import GravityConsole, SOFT_MIN_DEG
 from gravity_console.shooting_control import MotionCancelled
 
 
@@ -40,6 +40,19 @@ class ShootingControlTests(unittest.TestCase):
 
     def ready(self):
         self.app._set_status(mode="holding", enabled=True, connected=True)
+
+    def test_joint_soft_limits(self):
+        self.app._assert_soft_limits(np.deg2rad([100.] * 6), label="upper boundary")
+        lower = np.array([-55., -8., -1.5, -70., -40., -70.])
+        np.testing.assert_array_equal(SOFT_MIN_DEG, lower)
+        self.app._assert_soft_limits(np.deg2rad(lower + 1e-8), label="inside lower boundary")
+        for index in range(6):
+            for value in (100.1, lower[index] - .1):
+                with self.subTest(joint=index + 1, value=value):
+                    pose = np.zeros(6)
+                    pose[index] = value
+                    with self.assertRaisesRegex(RuntimeError, f"J{index + 1}="):
+                        self.app._assert_soft_limits(np.deg2rad(pose), label="outside boundary")
 
     def group(self, count=3, interval=0):
         group = self.app._groups.groups[0]
