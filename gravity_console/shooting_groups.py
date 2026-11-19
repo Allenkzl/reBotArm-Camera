@@ -101,6 +101,9 @@ class ShootingGroupStore:
             interval = group.get("interval_s")
             if type(interval) not in (int, float) or not math.isfinite(interval) or not 0 <= interval <= 60:
                 raise ValueError("group interval must be between 0 and 60 seconds")
+            delay = group.get("pre_shutter_delay_s", 0.)
+            if type(delay) not in (int, float) or not math.isfinite(delay) or not 0 <= delay <= 60:
+                raise ValueError("pre-shutter delay must be between 0 and 60 seconds")
             blocks = group.get("blocks")
             if not isinstance(blocks, list) or not 1 <= len(blocks) <= MAX_BLOCKS:
                 raise ValueError(f"each shooting group must contain 1-{MAX_BLOCKS} blocks")
@@ -163,13 +166,16 @@ class ShootingGroupStore:
         self._commit(groups)
         return group["id"]
 
-    def update_group(self, group_id: str, name: str | None = None, interval_s: float | None = None) -> None:
+    def update_group(self, group_id: str, name: str | None = None, interval_s: float | None = None,
+                     *, pre_shutter_delay_s: float | None = None) -> None:
         groups = copy.deepcopy(self.groups)
         group = self._group(groups, group_id)
         if name is not None:
             group["name"] = name
         if interval_s is not None:
             group["interval_s"] = interval_s
+        if pre_shutter_delay_s is not None:
+            group["pre_shutter_delay_s"] = pre_shutter_delay_s
         self._commit(groups)
 
     def delete_group(self, group_id: str) -> None:
@@ -206,6 +212,7 @@ class ShootingGroupStore:
         groups = copy.deepcopy(self.groups)
         by_slot = {t["slot"]: t for t in trajectory_summaries}
         for group in groups:
+            group.setdefault("pre_shutter_delay_s", 0.)
             for block in group["blocks"]:
                 block["trajectory"] = copy.deepcopy(by_slot.get(block["slot"]))
         return groups

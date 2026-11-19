@@ -1,0 +1,240 @@
+diff --git a/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/hardware_manager.py b/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/hardware_manager.py
+index 7a6388e..c8abb4e 100644
+--- a/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/hardware_manager.py
++++ b/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/hardware_manager.py
+@@ -87,6 +87,13 @@ class HardwareManager:
+         if self._arm_group is None:
+             raise ValueError("hardware config must define groups.arm")
+         self._gripper_group = self._robot.groups.get("gripper")
++        self._startup_enabled = (hardware_data.get("control", {}) or {}).get("startup_enabled", True)
++        if type(self._startup_enabled) is not bool:
++            raise ValueError("control.startup_enabled must be boolean")
++        self._home_position = np.asarray(
++            finite_vector(hardware_data.get("home_position", [0.0] * len(self.joint_names)),
++                          len(self.joint_names)), dtype=np.float64
++        )
+         self._robot_get_state = self._robot.get_state
+         self._robot.get_state = self._get_arm_state
+         self._arm_mit_kp = np.array(control_runtime["mit_kp"], dtype=np.float64)
+@@ -297,9 +304,10 @@ class HardwareManager:
+             self._robot.connect()
+             if self.has_gripper:
+                 self._gripper_target_position = self.get_gripper_state()[0]
+-            self._start_endpos_loop()
++            if self._startup_enabled:
++                self._start_endpos_loop()
+             self._connected = True
+-            self._enabled = True
++            self._enabled = self._startup_enabled
+         except Exception:
+             self._control_output_enabled = False
+             self._endpos_ctrl._running = False
+@@ -314,6 +322,12 @@ class HardwareManager:
+     def shutdown(self, disable_after_safe_home: bool = True) -> None:
+         if not self._connected:
+             return
++        if not self._enabled:
++            self._robot.stop_control_loop()
++            self._robot.disconnect()
++            self._connected = False
++            self._control_output_enabled = False
++            return
+         try:
+             self.safe_home()
+             with self._cmd_lock:
+@@ -376,7 +390,7 @@ class HardwareManager:
+         tolerance_rad: float = _SAFE_HOME_TOLERANCE_RAD,
+         velocity_tolerance_rad_s: float = _SAFE_HOME_VELOCITY_TOLERANCE_RAD_S,
+     ) -> bool:
+-        """Return whether every arm joint is close enough to the zero pose.
++        """Return whether every arm joint is close enough to the configured Home.
+ 
+         A fresh hardware read is intentional here: this check gates motor
+         disable, so a cached browser or controller target must not be used.
+@@ -399,7 +413,7 @@ class HardwareManager:
+         if not np.all(np.isfinite(velocities)):
+             raise RuntimeError("joint velocity feedback contains non-finite values")
+         return bool(
+-            np.all(np.abs(positions) <= float(tolerance_rad))
++            np.all(np.abs(positions - self._home_position) <= float(tolerance_rad))
+             and np.all(np.abs(velocities) <= float(velocity_tolerance_rad_s))
+         )
+ 
+@@ -533,7 +547,7 @@ class HardwareManager:
+             self.set_state_machine("SAFE_HOMING")
+             self._homing_thread = threading.get_ident()
+         try:
+-            self._endpos_ctrl.safe_home()
++            self._endpos_ctrl.safe_home(home_position=self._home_position)
+         finally:
+             if self.has_gripper:
+                 self._mit_gripper_target = None
+@@ -1327,7 +1341,41 @@ class HardwareManager:
+             return
+         self._start_endpos_loop(target)
+ 
++    def _verify_startup_feedback(self) -> np.ndarray:
++        poses = []
++        for _ in range(2):
++            values = []
++            for name in self.joint_names:
++                motor = self._arm_group._mm[name]
++                value = float(motor.robstride_get_param_f32(0x7019, timeout_ms=250))
++                if not np.isfinite(value):
++                    raise RuntimeError("invalid startup feedback: " + name)
++                values.append(value)
++            poses.append(np.asarray(values, dtype=float))
++        if np.max(np.abs(poses[1]-poses[0])) > np.deg2rad(2.):
++            raise RuntimeError("startup pose moved over 2 degrees")
++        return poses[-1]
++
++    @_locked
++    def emergency_hold_current(self) -> None:
++        if not self._enabled or not self.control_loop_active:
++            raise RuntimeError("arm is not in active position hold")
++        if self._gravity_comp_active:
++            raise RuntimeError("stop gravity compensation before holding")
++        if time.monotonic()-self._feedback_refreshed_at > .5:
++            raise RuntimeError("feedback stale; keeping existing hold target")
++        self.stop_motion()
++        self._mit_stream_target = None
++        self._lowlevel_pos_target = None
++        self._endpos_ctrl._q_target[:] = self._cached_arm_position.copy()
++        self._endpos_ctrl._qd_target[:] = 0.
++        self._mit_stream_velocity.fill(0.)
++        self._mit_stream_acceleration.fill(0.)
++        self.set_state_machine("IDLE")
++
+     def _start_endpos_loop(self, target: np.ndarray | None = None) -> None:
++        if not self._enabled:
++            self._cached_arm_position = self._verify_startup_feedback()
+         self._configure_groups_for_endpos()
+         if target is None:
+             self.hold_current_position()
+diff --git a/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/ros_services.py b/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/ros_services.py
+index c382f32..c8f2f69 100644
+--- a/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/ros_services.py
++++ b/rebotarm_ros2_RS/src/rebotarmcontroller/rebotarmcontroller/ros_services.py
+@@ -19,6 +19,8 @@ class ArmServices:
+         self._hardware = hardware
+ 
+         services = (
++            (Trigger, "hold_current", self.hold_current, node.reentrant_group),
++            (Trigger, "emergency_disable", self.emergency_disable, node.reentrant_group),
+             (Trigger, "enable", self.enable, node.slow_group),
+             (Trigger, "disable", self.disable, node.slow_group),
+             (Trigger, "safe_home", self.safe_home, node.slow_group),
+@@ -60,6 +62,14 @@ class ArmServices:
+                 callback_group=group,
+             )
+ 
++    def hold_current(self, _request, response):
++        return self._run(response, self._hardware.emergency_hold_current,
++                         "current-pose hold requested; no Home or disable")
++
++    def emergency_disable(self, _request, response):
++        return self._run(response, self._hardware.disable,
++                         "emergency disabled; no Home")
++
+     def _run(self, response, action, success_message: str, *, read_hardware=True):
+         try:
+             action()
+diff --git a/rebotarm_ros2_RS/third_party/reBotArm_control_py/reBotArm_control_py/controllers/rebotarm_endpose_controller.py b/rebotarm_ros2_RS/third_party/reBotArm_control_py/reBotArm_control_py/controllers/rebotarm_endpose_controller.py
+index adbf068..6a11d6c 100644
+--- a/rebotarm_ros2_RS/third_party/reBotArm_control_py/reBotArm_control_py/controllers/rebotarm_endpose_controller.py
++++ b/rebotarm_ros2_RS/third_party/reBotArm_control_py/reBotArm_control_py/controllers/rebotarm_endpose_controller.py
+@@ -178,6 +178,7 @@ class RebotArmEndPose:
+         send_freq: float = 50.0,
+         settle_thresh: float = 0.01,
+         timeout: float = 15.0,
++        home_position: np.ndarray | None = None,
+     ) -> None:
+         if not self._running:
+             return
+@@ -186,10 +187,14 @@ class RebotArmEndPose:
+         q_curr = q_curr[: self._n]
+         q_start = q_curr.copy()
+ 
+-        home_pos = np.zeros(self._n)
++        home_pos = (np.zeros(self._n) if home_position is None
++                    else np.array(home_position, dtype=np.float64, copy=True))
++        if home_pos.shape != (self._n,) or not np.all(np.isfinite(home_pos)):
++            raise ValueError("Home must contain one finite angle per arm joint")
+         q_err = np.abs(home_pos - q_start)
+         max_err = float(np.max(q_err))
+         if max_err < 0.01:
++            self._q_target[:] = home_pos
+             return
+ 
+         t_ramp = max_err / max_vel
+@@ -217,11 +222,11 @@ class RebotArmEndPose:
+             self._q_target[:] = traj[i]
+             time.sleep(interval)
+ 
+-        self._q_target[:] = 0.0
++        self._q_target[:] = home_pos
+         settle_deadline = time.monotonic() + 3.0
+         while time.monotonic() < settle_deadline:
+             q_now, _, _ = self.rebotarm.get_state()
+-            if np.max(np.abs(q_now[: self._n])) < settle_thresh:
++            if np.max(np.abs(q_now[: self._n] - home_pos)) < settle_thresh:
+                 break
+             time.sleep(self._dt)
+         self._vlim_override = None
+diff --git a/scripts/rs_env.sh b/scripts/rs_env.sh
+index 309ad37..a8e046d 100755
+--- a/scripts/rs_env.sh
++++ b/scripts/rs_env.sh
+@@ -2,6 +2,9 @@
+ 
+ set -eo pipefail
+ 
++# reComputer: isolate pre-existing user-site packages from this workspace.
++export PYTHONNOUSERSITE=1
++
+ REBOTARM_RS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ if [[ -n "${ROS_DISTRO:-}" ]]; then
+   REBOTARM_ROS_DISTRO="${ROS_DISTRO}"
+@@ -61,6 +64,9 @@ REBOTARM_CMEEL_SITE_PACKAGES="${REBOTARM_VENV_SITE_PACKAGES}/cmeel.prefix/lib/${
+ export PYTHONPATH="${REBOTARM_CMEEL_SITE_PACKAGES}:${REBOTARM_VENV_SITE_PACKAGES}${PYTHONPATH:+:${PYTHONPATH}}"
+ source "${REBOTARM_WS_SETUP}"
+ 
++# Prefer wheel-matched Pinocchio/EigenPy libraries over older ROS system copies.
++export LD_LIBRARY_PATH="${REBOTARM_VENV_SITE_PACKAGES}/cmeel.prefix/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
++
+ if [[ "${REBOTARM_RESTORE_NOUNSET}" == true ]]; then
+   set -u
+ fi
+diff --git a/scripts/setup_rs_workspace.sh b/scripts/setup_rs_workspace.sh
+index 1895bd9..88fe6c7 100755
+--- a/scripts/setup_rs_workspace.sh
++++ b/scripts/setup_rs_workspace.sh
+@@ -2,6 +2,9 @@
+ 
+ set -euo pipefail
+ 
++# reComputer: keep colcon on the system ROS packaging toolchain.
++export PYTHONNOUSERSITE=1
++
+ REBOTARM_RS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ if [[ -n "${ROS_DISTRO:-}" ]]; then
+   REBOTARM_ROS_DISTRO="${ROS_DISTRO}"
+diff --git a/scripts/start_rs_hardware.sh b/scripts/start_rs_hardware.sh
+index dccecbf..1648004 100755
+--- a/scripts/start_rs_hardware.sh
++++ b/scripts/start_rs_hardware.sh
+@@ -172,7 +172,14 @@ if ! ip link show can0 >/dev/null 2>&1; then
+ fi
+ 
+ ip -details link show can0
++REBOTARM_HARDWARE_ARGS=()
++if [[ -n "${REBOTARM_HARDWARE_CONFIG:-}" ]]; then
++  [[ -f "${REBOTARM_HARDWARE_CONFIG}" ]] || { echo "Missing hardware config: ${REBOTARM_HARDWARE_CONFIG}" >&2; exit 1; }
++  REBOTARM_HARDWARE_ARGS+=("hardware_config:=${REBOTARM_HARDWARE_CONFIG}")
++fi
++
+ exec ros2 launch rebotarm_bringup bringup.launch.py \
++  "${REBOTARM_HARDWARE_ARGS[@]}" \
+   model:=rs \
+   channel:=can0 \
+   arm_namespace:=rebot_arm_rs \

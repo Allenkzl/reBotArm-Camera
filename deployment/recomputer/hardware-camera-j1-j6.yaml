@@ -1,0 +1,77 @@
+default_model: rs
+models:
+  rs:
+    sdk_config: /home/com/ReBot_Arm_DigitalTwin_RS/deployment/recomputer/sdk-camera-j1-j6.yaml
+    overrides:
+      name: reBotArm-RS
+      urdf_path: /home/com/ReBot_Arm_DigitalTwin_RS/deployment/recomputer/models/ReBot_Arm_RS_Camera_950g.urdf
+      end_effector_frame: gripper_end
+      channel: can0
+      rate: 125
+      groups:
+        arm:
+          joints:
+          - joint1
+          - joint2
+          - joint3
+          - joint4
+          - joint5
+          - joint6
+      gripper:
+        position_limits:
+          open: 5.0
+          close: 0.0
+      control:
+        arm_control_mode: mit
+        mit_kp:
+        - 80.0
+        - 150.0
+        - 150.0
+        - 50.0
+        - 50.0
+        - 50.0
+        mit_kd:
+        - 5.0
+        - 10.0
+        - 10.0
+        - 5.0
+        - 4.0
+        - 4.0
+        leader_mit_kp:
+        - 50.0
+        - 50.0
+        - 50.0
+        - 30.0
+        - 50.0
+        - 50.0
+        leader_mit_kd:
+        - 3.0
+        - 5.0
+        - 5.0
+        - 3.0
+        - 4.0
+        - 4.0
+        leader_gripper_velocity_limit: 3.0
+        stream_acceleration_limit: 4.0
+        stream_jerk_limit: 30.0
+        stream_natural_frequency: 8.0
+        startup_enabled: false
+      gravity_compensation:
+        kp: 1.5
+        kd: 1.0
+        tau_scale:
+        - 1.0
+        - 0.92
+        - 0.98
+        - 1.0
+        - 1.0
+        - 1.0
+        torque_limit: 0.0
+        transition_duration: 0.5
+      gripper_assist:
+        torque: 0.04
+        kd: 0.001
+        velocity_threshold: 0.02
+        velocity_full: 0.22
+        speed_limit: 0.8
+        breakaway_fraction: 0.3

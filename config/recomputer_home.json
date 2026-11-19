@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "reference_id": "user-home-20261119_135636",
+  "confirmed_date": "2026-11-19",
+  "q_rad": [
+    -0.023777451366186142,
+    0.005368933081626892,
+    -0.011888351291418076,
+    0.06596267223358154,
+    -0.002684466540813446,
+    -0.054841313511133194
+  ],
+  "q_deg": [
+    -1.3623476108600392,
+    0.307617206065388,
+    -0.6811523543671576,
+    3.7793827243890057,
+    -0.153808603032694,
+    -3.14217580714171
+  ],
+  "peak_to_peak_deg": [
+    0.0,
+    0.021972665199078128,
+    0.02201556732480227,
+    0.0,
+    0.021972665199078128,
+    0.0
+  ],
+  "sample_count": 122,
+  "sample_window_s": 2.016312394,
+  "source": "ROS /rebot_arm_rs/joint_states, 2026-11-19T13:56:36+08:00",
+  "coordinate_policy": "user-selected software zero and Home; encoder coordinates preserved",
+  "encoder_zero_write_performed": false,
+  "compatible_home_references": [
+    "user-home-20261118_174118"
+  ],
+  "user_confirmed_final": true
+}

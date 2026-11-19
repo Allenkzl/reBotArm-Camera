@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>reBot 拍摄工作台</title><link rel="stylesheet" href="/styles.css?v=joint-temperature"></head><body>
+<div id="shooting-studio">
+  <header class="studio-head">
+    <div class="studio-brand"><div class="studio-wordmark">reBot Studio</div><div class="studio-sub">机械臂拍摄工作台</div></div>
+    <div class="studio-header-controls">
+      <span class="preview-tag" id="connection-label">连接中…</span>
+      <div id="studio-language" class="language-switch" role="group" aria-label="语言">
+        <button type="button" lang="zh-CN" data-language="zh-CN" aria-pressed="true">中文</button>
+        <button type="button" lang="en" data-language="en" aria-pressed="false">English</button>
+      </div>
+    </div>
+  </header>
+  <div id="thermal-alert" class="thermal-alert" hidden>
+    <div id="thermal-alert-text" role="alert"></div>
+    <button type="button" id="thermal-reset" class="small-button" hidden>确认冷却并解除保护</button>
+  </div>
+  <div class="status-overview">
+    <div class="status-overview-left">
+  <section id="framing-cue" class="framing-cue" role="status" aria-live="polite" aria-atomic="true">
+    <strong id="framing-cue-heading">正在获取机械臂状态</strong>
+    <span id="framing-cue-detail"></span>
+  </section>
+    </div>
+    <div class="status-overview-right">
+  <div class="hold-monitor">
+  <section class="live-angles" aria-label="六轴实时角度">
+    <div class="live-angles-header"><strong id="live-angle-title">六轴实时角度 · 等待本次打点</strong><span id="live-angles-status">等待读数</span></div>
+    <div id="live-angles-grid" class="live-angles-grid"></div>
+  </section>
+  <section id="hold-cue" hidden class="hold-cue" data-phase="idle" aria-label="无快门保持测试">
+    <div class="hold-cue-copy">
+      <span id="hold-cue-badge">无快门保持测试</span>
+      <strong id="hold-cue-instruction" role="status">等待测试，继续托稳</strong>
+      <span id="hold-cue-detail">出现松手提示前，请持续托住相机和支架。</span>
+    </div>
+    <div id="hold-cue-seconds" class="hold-cue-seconds" aria-label="剩余秒数">—</div>
+    <button type="button" class="studio-button secondary" id="hold-cue-preview" disabled>预览 10 秒倒计时</button>
+  </section>
+  </div>
+    </div>
+  </div>
+  <div class="studio-layout">
+    <aside class="control-rail" aria-label="机械臂控制">
+      <h2 class="rail-heading">机械臂控制</h2>
+      <div class="arm-status"><span class="status-dot"></span><span id="studio-status">未使能</span></div>
+      <button type="button" class="studio-button start-control" id="studio-start"><strong>启动机械臂</strong><span>自动回 Home · 到位后保持</span></button>
+      <button type="button" class="studio-button return-control" id="studio-home" disabled><strong>回零点（Home）</strong><span>回到零位 · 保持使能</span></button>
+      <button type="button" class="studio-button return-control" id="studio-return" disabled><strong>关闭机械臂</strong><span>回到 Home · 然后失能</span></button>
+    <button type="button" id="studio-emergency" class="emergency-control rail-emergency" disabled>紧急停止并保持</button>
+      <section class="camera-panel" aria-labelledby="camera-heading">
+        <h2 class="rail-heading" id="camera-heading">相机状态</h2>
+        <button type="button" class="studio-button camera-button" id="camera-connect" disabled>连接蓝牙相机</button>
+        <button type="button" class="studio-button camera-button" id="camera-disconnect" disabled>断开连接</button>
+        <p id="camera-status" class="camera-status" role="status">正在读取相机状态…</p>
+        <p id="camera-operation" class="camera-note" role="status"></p>
+        <p id="camera-error" class="camera-error" role="alert" hidden></p>
+        <details class="camera-settings"><summary>拍照设置</summary><label for="camera-post-delay">拍照后停留（秒）</label><div class="camera-delay"><input id="camera-post-delay" type="number" min="0" max="10" step="0.1" value="0"><button type="button" class="small-button" id="camera-save-settings" disabled>保存</button></div><p class="camera-note">快门完成后按设置停留。首次配对请使用原有快门网页完成。</p></details>
+      </section>
+      <div class="rail-divider"></div>
+      <h2 class="rail-heading">配重设置</h2>
+      <button type="button" class="payload-control" id="studio-payload" aria-expanded="false"><span>额定配重</span><strong><span id="payload-weight">—</span> <small>g</small></strong><span class="payload-caption">查看配置 </span></button>
+      <div id="payload-detail" hidden><div id="payload-mode" class="payload-note">等待负载配置</div><label class="payload-label" for="payload-rated">末端负载（克）</label><input id="payload-rated" type="number" disabled><div id="payload-note" class="payload-note"></div></div>
+      <div class="rail-divider"></div>
+      <div class="rail-guide"><span class="guide-step">1</span><p>启动机械臂<br><span>手动拖动并录制动作</span></p><span class="guide-step">2</span><p>选择拍摄组<br><span>按顺序播放组内动作</span></p><span class="guide-step">3</span><p>完成后关闭<br><span>Home 零位后失能</span></p></div>
+    </aside>
+    <main class="studio-main">
+      <div class="workspace-title"><h1>拍摄序列</h1><button type="button" class="studio-button secondary" id="studio-add-group">新增拍摄组</button></div>
+      <nav id="studio-groups" class="group-nav" aria-label="拍摄组选择"></nav>
+      <section class="sequence-sheet" aria-label="当前拍摄组">
+        <div class="sequence-top"><div class="group-title-area"><label for="studio-group-name" class="section-kicker">当前拍摄组</label><input type="text" id="studio-group-name" aria-label="拍摄组名称" maxlength="24"><span id="studio-summary" class="sequence-summary"></span></div><button type="button" class="studio-button text-button" id="studio-delete-group">删除组</button></div>
+        <div class="sequence-toolbar">
+          <div class="sequence-timing">
+            <div class="sequence-timing-row">
+              <label for="studio-gap" class="interval-field"><span>动作间隔</span><span class="interval-input"><input id="studio-gap" type="number" value="5" min="0" max="60" step="1"><span>秒</span></span></label>
+              <span class="interval-description">前一个动作完成后，等待再执行下一个</span>
+            </div>
+            <div class="sequence-timing-row">
+              <label for="studio-pre-shutter" class="interval-field"><span>拍照前等待</span><span class="interval-input"><input id="studio-pre-shutter" type="number" value="0" min="0" max="60" step="0.1"><span>秒</span></span></label>
+              <span class="interval-description">到达拍摄点后，等待再触发快门</span>
+            </div>
+          </div>
+          <button type="button" id="studio-play-group" class="studio-button play-control"><span>播放整组</span></button>
+        </div>
+        <p id="studio-play-hint" class="group-play-hint" role="status"></p>
+        <div id="studio-progress" class="sequence-progress" hidden><div id="studio-progress-label" aria-live="polite"></div><div class="sequence-progress-track"><div id="studio-progress-fill"></div></div></div>
+        <div id="photo-capture-progress" class="photo-capture-progress" role="status" aria-live="polite" hidden></div>
+        <div class="sequence-columns"><span>执行顺序 / 动作</span><span>录制与预览</span></div>
+        <div id="studio-blocks" class="action-list"></div>
+        <button type="button" class="add-action" id="studio-add-action">新增动作块</button>
+        <div class="sequence-bottom"><span id="studio-order"></span><span>整组播放后停留，点击「关闭机械臂」完成收尾</span></div>
+      </section>
+      <div class="studio-message" id="studio-message" role="status" aria-live="polite">正在读取机械臂状态…</div>
+      <details class="runtime-details"><summary>运行详情</summary><p id="runtime-summary"></p><p id="runtime-profile"></p><button type="button" id="direct-disable" class="studio-button">紧急失能</button><p class="payload-note">紧急停止会停止当前动作并保持使能；紧急失能会立即卸去支撑力，必须先人工支撑机械臂。</p><div id="runtime-events" role="log" aria-label="运行事件"></div></details>
+    </main>
+  </div>
+</div>
+<script src="/i18n.js?v=drive-controls"></script><script src="/app.js?v=drive-controls"></script></body></html>

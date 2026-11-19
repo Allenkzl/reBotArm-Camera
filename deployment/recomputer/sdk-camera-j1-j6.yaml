@@ -1,0 +1,100 @@
+urdf_path: /home/com/ReBot_Arm_DigitalTwin_RS/deployment/recomputer/models/ReBot_Arm_RS_Camera_950g.urdf
+end_effector_frame: gripper_end
+arm_control_mode: mit
+channel: can0
+rate: 500
+groups:
+  arm:
+    joints:
+    - joint1
+    - joint2
+    - joint3
+    - joint4
+    - joint5
+    - joint6
+joints:
+- name: joint1
+  motor_id: 1
+  feedback_id: 253
+  model: rs-06
+  vendor: robstride
+  MIT:
+    kp: 50.0
+    kd: 3.0
+  POS_VEL:
+    vel_kp: 12.0
+    vel_ki: 0.1
+    pos_kp: 13.0
+    vlim: 10.0
+- name: joint2
+  motor_id: 2
+  feedback_id: 253
+  model: rs-06
+  vendor: robstride
+  MIT:
+    kp: 150.0
+    kd: 10.0
+  POS_VEL:
+    vel_kp: 14.0
+    vel_ki: 0.1
+    pos_kp: 16.0
+    vlim: 10.0
+- name: joint3
+  motor_id: 3
+  feedback_id: 253
+  model: rs-06
+  vendor: robstride
+  MIT:
+    kp: 150.0
+    kd: 10.0
+  POS_VEL:
+    vel_kp: 14.0
+    vel_ki: 0.1
+    pos_kp: 14.0
+    vlim: 10.0
+- name: joint4
+  motor_id: 4
+  feedback_id: 253
+  model: rs-00
+  vendor: robstride
+  MIT:
+    kp: 50.0
+    kd: 5.0
+  POS_VEL:
+    vel_kp: 5.0
+    vel_ki: 0.1
+    pos_kp: 20.0
+    vlim: 10.0
+- name: joint5
+  motor_id: 5
+  feedback_id: 253
+  model: rs-00
+  vendor: robstride
+  MIT:
+    kp: 50.0
+    kd: 4.0
+  POS_VEL:
+    vel_kp: 4.0
+    vel_ki: 0.1
+    pos_kp: 10.0
+    vlim: 10.0
+- name: joint6
+  motor_id: 6
+  feedback_id: 253
+  model: rs-00
+  vendor: robstride
+  MIT:
+    kp: 50.0
+    kd: 4.0
+  POS_VEL:
+    vel_kp: 4.0
+    vel_ki: 0.1
+    pos_kp: 10.0
+    vlim: 10.0
+home_position:
+- -0.023777451366186142
+- 0.005368933081626892
+- -0.011888351291418076
+- 0.06596267223358154
+- -0.002684466540813446
+- -0.054841313511133194
